@@ -304,13 +304,14 @@ def count_memes(lock):
 
         total, postable = Counter(), Counter()
         for post, data in memes.items():
-            sub = data.get('sub')
-            ups = data.get('highest_ups')
-            sub_threshold = thresholds[sub] if sub is not None and sub in thresholds else thresholds['global']
+            if not data.get('over_18'):
+                sub = data.get('sub')
+                ups = data.get('highest_ups')
+                sub_threshold = thresholds[sub] if sub is not None and sub in thresholds else thresholds['global']
 
-            total[sub] += 1
-            if ups >= sub_threshold:
-                postable[sub] += 1
+                total[sub] += 1
+                if ups >= sub_threshold:
+                    postable[sub] += 1
         return total, postable
     except OSError:
         return Counter(), Counter()
@@ -457,7 +458,7 @@ if __name__ == "__main__":
             except Exception as e:
                 lock.acquire()
                 with open('memes/errors.txt', mode='a', encoding='utf-8') as errors:
-                    #errors.write(date + ' {}: {}\n'.format(str(minutes), type(e)))
+                    errors.write(datetime.datetime.now().isoformat() + '{}\n'.format(type(e)))
                     errors.write(traceback.format_exc() + '\n')
                     errors.write('-' * 100 + '\n')
                 lock.release()
