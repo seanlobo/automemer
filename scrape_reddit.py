@@ -5,6 +5,7 @@ import subprocess
 import ast
 import traceback
 import json
+import time
 from multiprocessing import Lock
 
 import praw
@@ -34,66 +35,76 @@ def scrape(lock):
     scraped_memes_path =  ABSOLUTE_PATH + 'scraped.json'                # scraped memes file
 
     # querying praw without lock acquired, because this takes a long time
-    reddit_memes = [[post for post in sub.hot(limit=NUM_MEMES)] for sub in subreddits]
+    reddit_memes = []
+    for sub in subreddits:
+        sub_memes = []
+        for post in sub.hot(limit=NUM_MEMES):
+            data = {
+                'over_18' : post.over_18,
+                'id' : post.id,
+                'ups' : post.ups,
+                'title' : post.title,
+                'url' : post.url,
+                'link' : post.shortlink,
+                'highest_ups' : post.ups,
+                'posted_to_slack' : False,
+                'author' : str(post.author),
+                'sub' : post.subreddit.display_name,
+                'upvote_ratio' : post.upvote_ratio,
+                'recorded' : repr(datetime.datetime.utcnow()),
+                'created_utc' : repr(datetime.datetime.fromtimestamp(post.created)),
+            }
+            sub_memes.append(data)
+        reddit_memes.append(sub_memes)
 
-    lock.acquire()
     try:
-        with open(meme_dict_path, mode='r', encoding='utf-8') as f:
-            meme_dict = json.loads(f.readline())  # meme_dict are the memes from today
-    except Exception as e:  # except any error and print the error to a file
-        meme_dict = dict()
-        with open(ABSOLUTE_PATH + 'errors.txt', mode='a', encoding='utf-8') as f:
-            f.write(date + ' ' + str(minutes) + ' {}\n'.format(type(e)))
-            f.write(traceback.format_exc() + '\n')
-            f.write('-' * 100 + '\n')
-        if not os.path.isfile(meme_dict_path):
-            with open(meme_dict_path, 'w') as f:
-                    f.write(json.dumps({}))
-
-    # writing new memes to scraped.json
-    try:
-        with open(scraped_memes_path, mode='r', encoding='utf-8') as scraped:
-            new_memes = json.loads(scraped.read())  # the other memes we've scraped today
-    except OSError as e:
-        new_memes = dict()
-
-    for i, sub in enumerate(subreddits):
-        sub_threshold = thresholds[sub] if sub in thresholds else thresholds['global']
+        lock.acquire()
         try:
-            for post in reddit_memes[i]:
-                if not post.over_18:
-                    if post.url not in meme_dict:
-                        data = dict()
-                        data['recorded'] = repr(datetime.datetime.utcnow())
-                        data['author'] = str(post.author)
-                        data['ups'] = post.ups
-                        data['highest_ups'] = post.ups
-                        data['id'] = post.id
-                        data['created_utc'] = repr(datetime.datetime.fromtimestamp(post.created))
-                        data['title'] = post.title
-                        data['upvote_ratio'] = post.upvote_ratio
-                        data['sub'] = post.subreddit.display_name
-                        data['link'] = post.shortlink
-                        data['posted_to_slack'] = False
-                        meme_dict[post.url] = data
-                        new_memes[post.url] = data
-                    else:
-                        meme_dict[post.url]['highest_ups'] = max(
-                                meme_dict[post.url]['highest_ups'],
-                                post.ups
-                        )
-                        meme_dict[post.url]['ups'] = post.ups
-                        meme_dict[post.url]['upvote_ratio'] = post.upvote_ratio
-                        if (meme_dict[post.url]['highest_ups'] > sub_threshold and
-                                not meme_dict[post.url].get('posted_to_slack', True)):
-                            new_memes[post.url] = meme_dict[post.url]
-        except Exception as e:
-            with open(ABSOLUTE_PATH + 'errors.txt', mode='a', encoding='utf-8') as error:
-                error.write(date + ' ' + str(minutes) + '\n')
-                error.write(traceback.format_exc() + '\n')
-                error.write('-' * 100 + '\n')
+            with open(meme_dict_path, mode='r', encoding='utf-8') as f:
+                meme_dict = json.loads(f.readline())  # meme_dict are the memes from today
+        except Exception as e:  # except any error and print the error to a file
+            meme_dict = dict()
+            with open(ABSOLUTE_PATH + 'errors.txt', mode='a', encoding='utf-8') as f:
+                f.write(date + ' ' + str(minutes) + ' {}\n'.format(type(e)))
+                f.write(traceback.format_exc() + '\n')
+                f.write('-' * 100 + '\n')
+            if not os.path.isfile(meme_dict_path):
+                with open(meme_dict_path, 'w') as f:
+                        f.write(json.dumps({}))
 
-    try:
+        # writing new memes to scraped.json
+        try:
+            with open(scraped_memes_path, mode='r', encoding='utf-8') as scraped:
+                new_memes = json.loads(scraped.read())  # the other memes we've scraped today
+        except OSError as e:
+            new_memes = dict()
+
+        for i, sub in enumerate(subreddits):
+            sub_threshold = thresholds[sub] if sub in thresholds else thresholds['global']
+            try:
+                for post in reddit_memes[i]:
+                    if post['url'] not in meme_dict:
+                        meme_dict[post['url']] = post
+                        if not post['over_18']:
+                            new_memes[post['url']] = post
+                    else:
+                        meme_dict[post['url']]['highest_ups'] = max(
+                                meme_dict[post['url']]['highest_ups'],
+                                post['ups']
+                        )
+                        meme_dict[post['url']]['ups'] = post['ups']
+                        meme_dict[post['url']]['upvote_ratio'] = post['upvote_ratio']
+                        if (meme_dict[post['url']]['highest_ups'] > sub_threshold and
+                                not meme_dict[post['url']].get('posted_to_slack', True) and
+                                not post['over_18']):
+                            new_memes[post['url']] = meme_dict[post['url']]
+            except Exception as e:
+                with open(ABSOLUTE_PATH + 'errors.txt', mode='a', encoding='utf-8') as error:
+                    date = datetime.datetime.now().isoformat()
+                    error.write(date + '\n')
+                    error.write(traceback.format_exc() + '\n')
+                    error.write('-' * 100 + '\n')
+
         with open(scraped_memes_path, mode='w', encoding='utf-8') as f:
             f.write(json.dumps(new_memes, indent=2))
 
