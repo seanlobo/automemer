@@ -3,6 +3,7 @@ memes
 *.txt
 *test*
 !requirements.txt
+.idea
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

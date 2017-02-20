@@ -10,8 +10,23 @@ from multiprocessing import Lock
 
 import praw
 
-def scrape(lock):
 
+# loading praw agent
+reddit = praw.Reddit('automemer', user_agent='meme scraper')
+ABSOLUTE_PATH = 'memes/'
+
+
+def log_error(error):
+    """Writes the given error to a log file"""
+    error_datetime = datetime.datetime.now().isoformat()
+    with open("memes/errors.txt", mode='a', encoding='utf-8') as f:
+        f.write('{name} at {time}\n'.format(name=str(type(error)), time=error_datetime))
+        f.write(traceback.format_exc() + '\n')
+        f.write('-' * 100)
+
+
+def scrape(lock=Lock()):
+    """Queries Praw to scrape subs according to preferences file"""
     # loading in subreddit list
     try:
         lock.acquire()
@@ -23,9 +38,7 @@ def scrape(lock):
         NUM_MEMES = settings.get('num_memes', 50)
         thresholds = settings.get('threshold_upvotes')
     except OSError as e: # logging errors and loading default sub of me_irl
-        with open(ABSOLUTE_PATH, mode='a', encoding='utf-8') as f:
-            f.write('-' * 100)
-            f.write(traceback.format_exc() + '\n')
+        log_error(e)
         subreddits = [reddit.subreddit('me_irl')]
         NUM_MEMES = 50
     finally:
@@ -63,11 +76,8 @@ def scrape(lock):
             with open(meme_dict_path, mode='r', encoding='utf-8') as f:
                 meme_dict = json.loads(f.readline())  # meme_dict are the memes from today
         except Exception as e:  # except any error and print the error to a file
+            log_error(e)
             meme_dict = dict()
-            with open(ABSOLUTE_PATH + 'errors.txt', mode='a', encoding='utf-8') as f:
-                f.write(date + ' ' + str(minutes) + ' {}\n'.format(type(e)))
-                f.write(traceback.format_exc() + '\n')
-                f.write('-' * 100 + '\n')
             if not os.path.isfile(meme_dict_path):
                 with open(meme_dict_path, 'w') as f:
                         f.write(json.dumps({}))
@@ -77,10 +87,11 @@ def scrape(lock):
             with open(scraped_memes_path, mode='r', encoding='utf-8') as scraped:
                 new_memes = json.loads(scraped.read())  # the other memes we've scraped today
         except OSError as e:
+            log_error(e)
             new_memes = dict()
 
         for i, sub in enumerate(subreddits):
-            sub_threshold = thresholds[sub] if sub in thresholds else thresholds['global']
+            sub_threshold = thresholds.get(sub, thresholds.get('global'))
             try:
                 for post in reddit_memes[i]:
                     if post['url'] not in meme_dict:
@@ -99,12 +110,9 @@ def scrape(lock):
                                 not post['over_18']):
                             new_memes[post['url']] = meme_dict[post['url']]
             except Exception as e:
-                with open(ABSOLUTE_PATH + 'errors.txt', mode='a', encoding='utf-8') as error:
-                    date = datetime.datetime.now().isoformat()
-                    error.write(date + '\n')
-                    error.write(traceback.format_exc() + '\n')
-                    error.write('-' * 100 + '\n')
+                log_error(e)
 
+        # update scraped memes file
         with open(scraped_memes_path, mode='w', encoding='utf-8') as f:
             f.write(json.dumps(new_memes, indent=2))
 
@@ -140,9 +148,6 @@ def update_meme(meme_url, lock):
         lock.release()
 
 
-# loading praw agent
-reddit = praw.Reddit('automemer', user_agent='me_irl scraper')
-ABSOLUTE_PATH = 'memes/'
 if __name__ == '__main__':
-    scrape(Lock())
+    scrape()
 
