@@ -20,9 +20,9 @@ def log_error(error):
     """Writes the given error to a log file"""
     error_datetime = datetime.datetime.now().isoformat()
     with open("memes/errors.txt", mode='a', encoding='utf-8') as f:
-        f.write('{name} at {time}\n'.format(name=str(type(error)), time=error_datetime))
+        f.write('\n{name} at {time}\n'.format(name=str(error), time=error_datetime))
         f.write(traceback.format_exc() + '\n')
-        f.write('-' * 100)
+        f.write('-' * 75 + '\n')
 
 
 def scrape(lock=Lock()):
@@ -44,7 +44,7 @@ def scrape(lock=Lock()):
     finally:
         lock.release()
 
-    meme_dict_path = ABSOLUTE_PATH + 'MEMES.txt'                        # meme file
+    meme_dict_path = ABSOLUTE_PATH + 'MEMES.json'                        # meme file
     scraped_memes_path =  ABSOLUTE_PATH + 'scraped.json'                # scraped memes file
 
     # querying praw without lock acquired, because this takes a long time
@@ -64,8 +64,9 @@ def scrape(lock=Lock()):
                 'author' : str(post.author),
                 'sub' : post.subreddit.display_name,
                 'upvote_ratio' : post.upvote_ratio,
-                'recorded' : repr(datetime.datetime.utcnow()),
-                'created_utc' : repr(datetime.datetime.fromtimestamp(post.created)),
+                'recorded' : datetime.datetime.utcnow().isoformat(),
+                'created_utc' : datetime.datetime.fromtimestamp(post.created).isoformat(),
+                'last_updated' : datetime.datetime.utcnow().isoformat(),
             }
             sub_memes.append(data)
         reddit_memes.append(sub_memes)
@@ -127,20 +128,20 @@ def update_meme(meme_url, lock):
     """Updates meme json file for the given meme, and returns given meme's data"""
     lock.acquire()
     try:
-        with open(ABSOLUTE_PATH + 'MEMES.txt', 'r', encoding='utf-8') as f:
+        with open(ABSOLUTE_PATH + 'MEMES.json', 'r', encoding='utf-8') as f:
             memes = f.read()
         memes = json.loads(memes)
         meme_data = memes.get(meme_url)
         if meme_data is None or 'id' not in meme_data:  # can't update without the meme and id
             return
 
-        id = meme_data['id']
-        post = reddit.submission(id=id)
-        meme_data['highest_ups'] = max(meme_data['highest_ups'], post.ups)
-        meme_data['ups'] = post.ups
+        post                      = reddit.submission(id=meme_data['id'])
+        meme_data['ups']          = post.ups
+        meme_data['highest_ups']  = max(meme_data.get('highest_ups', 0), post.ups)
         meme_data['upvote_ratio'] = post.upvote_ratio
+        meme_data['last_updated'] = datetime.datetime.utcnow().isoformat()
 
-        with open(ABSOLUTE_PATH + 'MEMES.txt', 'w', encoding='utf-8') as f:
+        with open(ABSOLUTE_PATH + 'MEMES.json', 'w', encoding='utf-8') as f:
             f.write(json.dumps(memes))
 
         return meme_data
@@ -149,5 +150,11 @@ def update_meme(meme_url, lock):
 
 
 if __name__ == '__main__':
-    scrape()
+    import time
+    i = 0
+    while True:
+        i += 1
+        print("Round {}".format(i))
+        scrape()
+        time.sleep(10 * 60)
 
