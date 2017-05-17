@@ -1,4 +1,6 @@
 ids.sh
+vendor
+Makefile
 memes
 *.json
 *.txt
