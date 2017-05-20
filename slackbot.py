@@ -9,7 +9,7 @@ import ast
 import json
 import traceback
 import html
-from collections import Counter
+from collections import Counter, defaultdict
 from multiprocessing import Lock, Process
 
 from slackclient import SlackClient
@@ -25,6 +25,7 @@ class AutoMemer:
         "add <sub>": "Adds <sub> to the list of subreddits scraped",
         "delete <sub>": "Deletes <sub> from the list of subreddits scraped",
         "list settings": "Prints out all settings",
+        "list thresholds": "Prints the thresholds for subs",
         "set threshold <threshold> {optional_subreddit}": (
             "Sets threshold upvotes a meme must meet to be scraped. If {optional_subreddit} "
             "is specified, sets <threshold> specifically for that sub, otherwise a global "
@@ -48,18 +49,23 @@ class AutoMemer:
         self.messages   = Queue()
         self.lock       = Lock()
         self.debug      = debug
-        self.log_file   = 'memes/log_file.txt'
+        self.users_list = None
+
+        self.log_file       = './memes/log_file.txt'
+        self.scraped_path   = './memes/scraped.json'
+        self.settings_path  = './memes/settings.txt'
+        self.all_memes_path = './memes/MEMES.json'
 
         # creating directories and files
         os.makedirs('memes', exist_ok=True)
         if not os.path.isfile('memes/errors.txt'):
             open('memes/errors.txt', 'x').close()
-        if not os.path.isfile('memes/MEMES.json'):
-            file = open('memes/MEMES.json', 'x')
+        if not os.path.isfile(self.all_memes_path):
+            file = open(self.all_memes_path, 'x')
             file.write(json.dumps({}))
             file.close()
-        if not os.path.isfile('memes/scraped.json'):
-            file = open('memes/scraped.json', 'x')
+        if not os.path.isfile(self.scraped_path):
+            file = open(self.scraped_path, 'x')
             file.write(json.dumps({}))
             file.close()
         if not os.path.isfile('memes/settings.txt'):
@@ -76,6 +82,7 @@ class AutoMemer:
     def run(self):
         READ_WEBSOCKET_DELAY = 1  # 1 second delay between reading from firehose
         if self.client.rtm_connect():
+            self.users_list = self.client.api_call("users.list")
             num_tries = 3
             for i in range(1, num_tries + 1):
                 try:
@@ -120,6 +127,73 @@ class AutoMemer:
         else:
             print("Connection failed. Invalid Slack token or bot ID?")
 
+    def handle_command(self, command, channel):
+        """
+        Receives commands directed at the bot and determines if they
+        are valid commands. If so, then acts on the commands. If not,
+        returns back what it needs for clarification.
+        """
+        response = '>{}\n'.format(command)
+        # specific command responses
+        if command.lower() == "help":
+            response += self._command_help()
+        elif command.lower() == "list subreddits":
+            response += self._command_list_subs()
+        elif command.lower().startswith("add"):
+            response += self._command_add_sub(command)
+        elif command.lower().startswith("delete"):
+            response += self._command_delete_sub(command)
+        elif command.lower() == "list settings":
+            response += self._command_list_settings()
+        elif command.lower().startswith("set threshold"):
+            response += self._command_set_threshold(command)
+        elif command.lower().startswith("list thresholds"):
+            response += self._command_list_thresholds()
+        elif command.lower().startswith("details"):
+            response += self._command_details(command)
+        elif command.lower().startswith("set post interval"):
+            response += self._command_set_post_interval(command)
+        elif command.lower().startswith("pop"):
+            reply = self._command_pop(command)
+            if reply == "":  # if we get an empty string back we've already popped the memes
+                return
+            else:
+                response += reply
+        elif command.lower().startswith('num-memes'):
+            response += self._command_num_memes(command)
+        elif command.lower() == "kill":
+            slack_client.api_call("chat.postMessage", channel=MEME_SPAM_CHANNEL,
+                                  text="have it your way", as_user=True)
+            sys.exit()
+        elif command.lower().startswith("echo "):
+            response = ''.join(command.split()[1:])
+            self.client.api_call(
+                "chat.postMessage",
+                channel=channel,
+                text=response,
+                link_names=1,
+                as_user=True
+            )
+            return
+        elif command.lower().startswith("users.list"):
+            response = type(
+                self.client.api_call("users.list")
+            )
+            self.client.api_call(
+                "chat.postMessage",
+                channel=channel,
+                text=response,
+                link_names=1,
+                as_user=True
+            )
+            return
+
+        else:  # a default response
+            response = (
+                '>*' + command + "*\nI don't know this command :dealwithitparrot:\n"
+            )
+        self.messages.push((channel, response))
+
     def load_scrape_interval(self):
         self.lock.acquire()
         try:
@@ -145,40 +219,46 @@ class AutoMemer:
         if sum(postable.values()) == 0 and user_prompt:
             self.messages.push((MEME_SPAM_CHANNEL, 'Sorry, we ran out of memes :('))
             return
-        meme_path = 'memes/scraped.json'
-        all_meme_path = 'memes/MEMES.json'
         try:
-            with open(meme_path, mode='r', encoding='utf-8') as f:
+            with open(self.scraped_path, mode='r', encoding='utf-8') as f:
                 text = f.read()
-            with open(all_meme_path, 'r', encoding='utf-8') as f:
+            with open(self.all_memes_path, 'r', encoding='utf-8') as f:
                 all_memes = f.read()
             all_memes = json.loads(all_memes)
             memes = json.loads(text)
-            with open('memes/settings.txt', mode='r', encoding='utf-8') as f:
+            with open(self.settings_path, mode='r', encoding='utf-8') as f:
                 settings = json.loads(f.read())
             thresholds = settings['threshold_upvotes']
+            memes_by_sub = defaultdict(lambda: list())
             for post, data in sorted(list(memes.items()), key=lambda x: x[1]['created_utc']):
-                ups = int(data.get('highest_ups'))
-                sub = data.get('sub')
+                memes_by_sub[data['sub']].append(data)
+
+            list_of_subs = list(memes_by_sub.keys())
+            sub_ind = 0
+            while limit > 0 and sum(len(lst) for lst in memes_by_sub) > 0:  # while we want and have more memes to pop
+                sub = list_of_subs[sub_ind]
                 sub_threshold = thresholds.get(sub.lower(), thresholds['global'])
-                if ups > sub_threshold:
-                    all_memes[post]['posted_to_slack'] = True
-                    limit -= 1
-                    meme_text = (
+                while memes_by_sub[sub]:  # while there are memes from this sub
+                    meme = memes_by_sub[sub].pop(0)
+                    del memes[meme['url']]
+                    ups = int(meme.get('highest_ups'))
+                    if ups > sub_threshold:  # this meme is DAAANK
+                        all_memes[meme['url']]['posted_to_slack'] = True
+                        limit -= 1
+                        meme_text = (
                             "*{title}* _(from /r/{sub})_ `{ups:,d}`\n{url}".format(
-                            title=data.get('title'),
+                            title=meme.get('title'),
                             sub=sub,
                             ups=ups,
-                            url=post
+                            url=meme['url'])
                         )
-                    )
-                    self.messages.push((MEME_SPAM_CHANNEL, meme_text))
-                del memes[post]
-                if limit <= 0:
-                    break
-            with open(meme_path, mode='w', encoding='utf-8') as f:
+                        self.messages.push((MEME_SPAM_CHANNEL, meme_text))
+                        break
+                sub_ind = (sub_ind + 1) % len(list_of_subs)
+
+            with open(self.scraped_path, mode='w', encoding='utf-8') as f:
                 f.write(json.dumps(memes, indent=2))
-            with open(all_meme_path, mode='w', encoding='utf-8') as f:
+            with open(self.all_memes_path, mode='w', encoding='utf-8') as f:
                 f.write(json.dumps(all_memes))
             if 0 < limit and user_prompt:
                 self.messages.push((MEME_SPAM_CHANNEL, 'Sorry, we ran out of memes :('))
@@ -210,6 +290,9 @@ class AutoMemer:
          directed at the Bot, based on its ID.
          """
          if slack_rtm_output:
+             for output in slack_rtm_output:
+                 if 'user' in output:
+                     output['username'] = self._get_name(output['user'])
              print(json.dumps(slack_rtm_output, indent=2))
          output_list = slack_rtm_output
          if output_list and len(output_list) > 0:
@@ -220,66 +303,11 @@ class AutoMemer:
                            output['channel']
          return None, None
 
-    def handle_command(self, command, channel):
-        """
-        Receives commands directed at the bot and determines if they
-        are valid commands. If so, then acts on the commands. If not,
-        returns back what it needs for clarification.
-        """
-        response = '>{}\n'.format(command)
-        # specific command responses
-        if command.lower() == "help":
-            response += self._command_help()
-        elif command.lower() == "list subreddits":
-            response += self._command_list_subs()
-        elif command.lower().startswith("add"):
-            response += self._command_add_sub(command)
-        elif command.lower().startswith("delete"):
-            response += self._command_delete_sub(command)
-        elif command.lower() == "list settings":
-            response += self._command_list_settings()
-        elif command.lower().startswith("set threshold"):
-            response += self._command_set_threshold(command)
-        elif command.lower().startswith("list thresholds"):
-            response += self._command_list_threshold()
-        elif command.lower().startswith("details"):
-            response += self._command_details(command)
-        elif command.lower().startswith("set post interval"):
-            response += self._command_set_post_interval(command)
-        elif command.lower().startswith("pop"):
-            reply = self._command_pop(command)
-            if reply == "":  # if we get an empty string back we've already popped the memes
-                return
-            else:
-                response += reply
-        elif command.lower().startswith('num-memes'):
-            response += self._command_num_memes(command)
-        elif command.lower() == "kill":
-            slack_client.api_call("chat.postMessage", channel=MEME_SPAM_CHANNEL,
-                                  text="have it your way", as_user=True)
-            sys.exit()
-        elif command.lower().startswith("echo "):
-            response = ''.join(command.split()[1:])
-            self.client.api_call(
-                "chat.postMessage",
-                channel=channel,
-                text=response,
-                link_names=1,
-                as_user=True
-            )
-            return
-
-        else:  # a default response
-            response = ('>*' + command + '*\n'
-                                         "I don't know this command :dealwithitparrot:\n"
-                        )
-        self.messages.push((channel, response))
 
     def count_memes(self):
-        meme_path = 'memes/scraped.json'
         try:
             self.lock.acquire()
-            with open(meme_path, mode='r', encoding='utf-8') as f:
+            with open(self.scraped_path, mode='r', encoding='utf-8') as f:
                 memes = f.read()
             with open('memes/settings.txt', mode='r', encoding='utf-8') as f:
                 settings = f.read()
@@ -290,9 +318,9 @@ class AutoMemer:
             total, postable = Counter(), Counter()
             for post, data in memes.items():
                 if not data.get('over_18'):
-                    sub = data.get('sub').lower()
+                    sub = data.get('sub', '').lower()
                     ups = data.get('highest_ups')
-                    sub_threshold = thresholds[sub] if sub is not None and sub in thresholds else thresholds['global']
+                    sub_threshold = thresholds.get(sub, thresholds['global'])
 
                     total[sub] += 1
                     if ups >= sub_threshold:
@@ -305,26 +333,9 @@ class AutoMemer:
 
     def _command_help(self):
         text = ""
-        for command in sorted(AutoMemer.bot_commands.keys()):
-            text += '`{}` - {}\n'.format(command, AutoMemer.bot_commands[command])
+        for command, description in sorted(AutoMemer.bot_commands.items(), key=lambda x: x[0]):
+            text += '`{}` - {}\n'.format(command, description)
         return text
-
-    def _command_list_subs(self):
-        response = ""
-        try:
-            self.lock.acquire()
-            settings = json.loads(open('./memes/settings.txt').read())
-            subs = sorted(settings.get('subs'))
-            response += (
-                'The following subreddits are currently being collected: {}'.format(
-                    str(subs))
-            )
-        except OSError as e:
-            response += ':sadparrot: error\n'
-            response += str(e)
-        finally:
-            self.lock.release()
-        return response
 
     def _command_add_sub(self, command):
         response = ""
@@ -333,7 +344,7 @@ class AutoMemer:
             response += "command must be in the form `add [name]`"
         else:
             command = command[1]
-            settings = json.loads(open('./memes/settings.txt').read())
+            settings = json.loads(open(self.settings_path).read())
             settings['subs'].append(command)
             self.lock.acquire()
             with open('memes/settings.txt', mode='w', encoding='utf-8') as f:
@@ -349,13 +360,19 @@ class AutoMemer:
             response += "command must be in the form `delete [name]`"
         else:
             sub = command[1]
-            settings = json.loads(open('./memes/settings.txt').read())
+            settings = json.loads(open(self.settings_path).read())
             previous_subs = settings['subs']
+            previous_thresholds = settings['threshold_upvotes']
             if sub not in previous_subs:
-                response += "_/r/{}_ is not currently being followed, nothing was done".format(sub)
+                response += (
+                    "_/r/{0}_ is not currently being followed, to add it use the"
+                    " command `add {0}`".format(sub)
+                )
             else:
                 previous_subs.remove(sub)
                 settings['subs'] = previous_subs
+                if sub in previous_thresholds:
+                    del previous_thresholds[sub]
                 self.lock.acquire()
                 with open('memes/settings.txt', mode='w', encoding='utf-8') as f:
                     f.write(json.dumps(settings, indent=2))
@@ -375,13 +392,30 @@ class AutoMemer:
             response += "`{key}`: {val}\n".format(key=key, val=json.dumps(val, indent=2))
         return response
 
-    def _command_list_threshold(self):
+    def _command_list_thresholds(self):
         response = ""
         try:
             self.lock.acquire()
-            settings = json.loads(open('./memes/settings.txt').read())
+            settings = json.loads(open(self.settings_path).read())
             thresholds = settings.get('threshold_upvotes')
-            response += str(thresholds)
+            response += json.dumps(thresholds, indent=2)
+        except OSError as e:
+            response += ':sadparrot: error\n'
+            response += str(e)
+        finally:
+            self.lock.release()
+        return response
+
+    def _command_list_subs(self):
+        response = ""
+        try:
+            self.lock.acquire()
+            settings = json.loads(open(self.settings_path).read())
+            subs = sorted(settings.get('subs'))
+            response += (
+                'The following subreddits are currently being collected: {}'.format(
+                    str(subs))
+            )
         except OSError as e:
             response += ':sadparrot: error\n'
             response += str(e)
@@ -391,48 +425,50 @@ class AutoMemer:
 
     def _command_set_threshold(self, command):
         response = ""
-        self.lock.acquire()
-        try:
-            command = command.lower().split()
-            if len(command) not in [3, 4]:
-                response += "command must be in the form 'set threshold [threshold] [optional-sub]'"
-            elif len(command) == 3 or command[-1].lower() == 'global':
+        command = command.lower().split()
+        if len(command) not in [3, 4]:
+            response += "command must be in the form 'set threshold {threshold} <optional-sub>'"
+        elif len(command) == 3 or command[-1].lower() == 'global':
+            threshold = command[2]
+            try:
+                threshold = int(threshold)
+            except ValueError:
+                response += "{threshold} is not a valid integer".format(threshold=threshold)
+            else:
+                old_threshold = self._command_set_threshold_to(threshold)
+                response += (
+                    "The global threshold has been set to *{threshold}*! (previously {old})"
+                    .format(threshold=threshold, old=old_threshold)
+                )
+        else:
+            sub = command[-1].lower()
+            with open("memes/settings.txt", mode='r', encoding='utf-8') as f:
+                settings = json.loads(f.read())
+            if sub not in settings['subs']:
+                response += "{} is not in the list of subreddits. run `list subreddits` to view a list".format(sub)
+            else:
                 threshold = command[2]
                 try:
                     threshold = int(threshold)
                 except ValueError:
                     response += "{threshold} is not a valid integer".format(threshold=threshold)
                 else:
-                    with open("memes/settings.txt", mode='r', encoding='utf-8') as f:
-                        settings = json.loads(f.read())
-                    settings['threshold_upvotes']['global'] = threshold
-                    with open("memes/settings.txt", mode='w', encoding='utf-8') as f:
-                        f.write(json.dumps(settings, indent=2))
-                    response += "The global threshold has been set to {threshold}!".format(threshold=threshold)
-            else:
-                sub = command[-1].lower()
-                with open("memes/settings.txt", mode='r', encoding='utf-8') as f:
-                    settings = json.loads(f.read())
-                if sub not in settings['subs']:
-                    response += "{} is not in the list of subreddits. run `list-subreddits` to view a list".format(sub)
-                else:
-                    threshold = command[2]
-                    if threshold.lower() == 'none':
-                        del settings['threshold_upvotes'][sub]
-                        with open("memes/settings.txt", mode='w', encoding='utf-8') as f:
-                            f.write(json.dumps(settings, indent=2))
-                    else:
-                        try:
-                            threshold = int(threshold)
-                        except ValueError:
-                            response += "{threshold} is not a valid integer".format(threshold=threshold)
-                        else:
-                            settings['threshold_upvotes'][sub] = threshold
-                            with open("memes/settings.txt", mode='w', encoding='utf-8') as f:
-                                f.write(json.dumps(settings, indent=2))
-                            response += "The threshold upvotes for _{sub}_ has been set to *{threshold}*!".format(
-                                sub=sub, threshold=threshold)
-            return response
+                    old_threshold = self._command_set_threshold_to(threshold, sub)
+                    response += (
+                        "The threshold upvotes for _{sub}_ has been set to *{threshold}*! (previously {old})"
+                        .format(sub=sub, threshold=threshold, old=old_threshold)
+                    )
+        return response
+
+    def _command_set_threshold_to(self, upvote_value, sub='global'):
+        self.lock.acquire()
+        try:
+            settings = json.loads(open(self.settings_path).read())
+            old = settings['threshold_upvotes'].get(sub, 'global')
+            settings['threshold_upvotes'][sub] = upvote_value
+            with open(self.settings_path, 'w') as f:
+                f.write(json.dumps(settings, indent=2))
+            return old
         finally:
             self.lock.release()
 
@@ -538,6 +574,21 @@ class AutoMemer:
                 response += "\n*Combined*: {}".format(str(sum(postable.values())))
         return response
 
+    def _get_name(self, user_id):
+        if self.users_list is None:
+            return user_id
+        for member in self.users_list['members']:
+            if member['id'] == user_id:
+                name = member.get('name')
+                if name is not None:
+                    return name
+                profile = members.get('profile')
+                if profile is not None:
+                    name = profile.get('real_name')
+                    if name is not None:
+                        return name
+                return user_id
+        return user_id
 
 class Queue:
     def __init__(self):
