@@ -20,25 +20,31 @@ from scrape_reddit import log_error
 
 class AutoMemer:
     bot_commands = {
-        "help": "Prints a list of commands and short descriptions",
-        "list subreddits": "Prints a list of subreddits currently being scraped",
         "add <sub>": "Adds <sub> to the list of subreddits scraped",
         "delete <sub>": "Deletes <sub> from the list of subreddits scraped",
+        "details <meme_url>": "Gives details for a meme if meme_url has been scraped",
+        "help": "Prints a list of commands and short descriptions",
+        "increase threshold <threshold> {optional_subreddit}": (
+            "Sets threshold for {optional_subreddit} to the old threshold + or - the <threshold> "
+            "value passed. Defaults to global"
+        ),
+        "kill": "Kills automemer. Program is stopped, no scraping, no posting. ded :rip:",
+        "link <url>": "Prints the link associated with the url passed",
         "list settings": "Prints out all settings",
+        "list subreddits": "Prints a list of subreddits currently being scraped",
         "list thresholds": "Prints the thresholds for subs",
+        "num-memes {dank_only} {by_sub}": (
+            "Prints the number of memes currently waiting to be posted. To only post dank memes use "
+            "`num-memes dank_only`, to get a breakdown by subreddit use `num-memes by_sub`"
+        ),
+        "pop {num}": "pops {num} memes (or as many as there are) from the queue",
+        "set scrape interval <int>": "sets the scrape interval to <int> minutes",
         "set threshold <threshold> {optional_subreddit}": (
             "Sets threshold upvotes a meme must meet to be scraped. If {optional_subreddit} "
             "is specified, sets <threshold> specifically for that sub, otherwise a global "
             "threshold is set (applied to subs without a specific threshold)"
         ),
-        "details <meme_url>": "Gives details for a meme if meme_url has been scraped",
-        "set scrape interval <int>": "sets the scrape interval to <int> minutes",
-        "pop {num}": "pops {num} memes (or as many as there are) from the queue",
-        "num-memes {dank_only} {by_sub}": (
-            "Prints the number of memes currently waiting to be posted. To only post dank memes use "
-            "`num-memes dank_only`, to get a breakdown by subreddit use `num-memes by_sub`"
-        ),
-        "kill": "Kills automemer. Program is stopped, no scraping, no posting. ded :rip:",
+
     }
 
     def __init__(self, bot_id, channel_id, debug=False):
@@ -111,8 +117,10 @@ class AutoMemer:
                         time.sleep(READ_WEBSOCKET_DELAY)
                 except Exception as e:
                     self.lock.acquire()
-                    log_error(e)
-                    self.lock.release()
+                    try:
+                        log_error(e)
+                    finally:
+                        self.lock.release()
                     if i == num_tries:
                         return e
                     text = (
@@ -135,22 +143,26 @@ class AutoMemer:
         """
         response = '>{}\n'.format(command)
         # specific command responses
-        if command.lower() == "help":
-            response += self._command_help()
-        elif command.lower() == "list subreddits":
-            response += self._command_list_subs()
-        elif command.lower().startswith("add"):
+        if command.lower().startswith("add"):
             response += self._command_add_sub(command)
         elif command.lower().startswith("delete"):
             response += self._command_delete_sub(command)
-        elif command.lower() == "list settings":
-            response += self._command_list_settings()
-        elif command.lower().startswith("set threshold"):
-            response += self._command_set_threshold(command)
-        elif command.lower().startswith("list thresholds"):
-            response += self._command_list_thresholds()
         elif command.lower().startswith("details"):
             response += self._command_details(command)
+        elif command.lower() == "help":
+            response += self._command_help()
+        elif command.lower().startswith("increase threshold"):
+            response += self._command_set_threshold(command, mode="+")
+        elif command.lower().startswith("list thresholds"):
+            response += self._command_list_thresholds()
+        elif command.lower().startswith("link"):
+            response += self._command_details(command, link_only=True)
+        elif command.lower() == "list settings":
+            response += self._command_list_settings()
+        elif command.lower() == "list subreddits":
+            response += self._command_list_subs()
+        elif command.lower().startswith("set threshold"):
+            response += self._command_set_threshold(command)
         elif command.lower().startswith("set post interval"):
             response += self._command_set_post_interval(command)
         elif command.lower().startswith("pop"):
@@ -293,7 +305,8 @@ class AutoMemer:
              for output in slack_rtm_output:
                  if 'user' in output:
                      output['username'] = self._get_name(output['user'])
-             print(json.dumps(slack_rtm_output, indent=2))
+             if output.get('type') not in ['presence_change', 'reconnect_url']:
+                print(json.dumps(slack_rtm_output, indent=2))
          output_list = slack_rtm_output
          if output_list and len(output_list) > 0:
              for output in output_list:
@@ -305,8 +318,8 @@ class AutoMemer:
 
 
     def count_memes(self):
+        self.lock.acquire()
         try:
-            self.lock.acquire()
             with open(self.scraped_path, mode='r', encoding='utf-8') as f:
                 memes = f.read()
             with open('memes/settings.txt', mode='r', encoding='utf-8') as f:
@@ -347,9 +360,11 @@ class AutoMemer:
             settings = json.loads(open(self.settings_path).read())
             settings['subs'].append(command)
             self.lock.acquire()
-            with open('memes/settings.txt', mode='w', encoding='utf-8') as f:
-                f.write(json.dumps(settings, indent=2))
-            self.lock.release()
+            try:
+                with open('memes/settings.txt', mode='w', encoding='utf-8') as f:
+                    f.write(json.dumps(settings, indent=2))
+            finally:
+                self.lock.release()
             response += "_/r/{}_ has been added!".format(command)
         return response
 
@@ -374,18 +389,22 @@ class AutoMemer:
                 if sub in previous_thresholds:
                     del previous_thresholds[sub]
                 self.lock.acquire()
-                with open('memes/settings.txt', mode='w', encoding='utf-8') as f:
-                    f.write(json.dumps(settings, indent=2))
-                self.lock.release()
+                try:
+                    with open('memes/settings.txt', mode='w', encoding='utf-8') as f:
+                        f.write(json.dumps(settings, indent=2))
+                finally:
+                    self.lock.release()
                 response += "_/r/{}_ has been removed".format(sub)
         return response
 
     def _command_list_settings(self):
         response = ""
         self.lock.acquire()
-        with open("memes/settings.txt", mode='r', encoding='utf-8') as f:
-            settings = json.loads(f.read())
-        self.lock.release()
+        try:
+            with open("memes/settings.txt", mode='r', encoding='utf-8') as f:
+                settings = json.loads(f.read())
+        finally:
+            self.lock.release()
         for key, val in sorted(settings.items()):
             if key == "subs":
                 val = sorted(val)
@@ -394,8 +413,8 @@ class AutoMemer:
 
     def _command_list_thresholds(self):
         response = ""
+        self.lock.acquire()
         try:
-            self.lock.acquire()
             settings = json.loads(open(self.settings_path).read())
             thresholds = settings.get('threshold_upvotes')
             response += json.dumps(thresholds, indent=2)
@@ -408,8 +427,8 @@ class AutoMemer:
 
     def _command_list_subs(self):
         response = ""
+        self.lock.acquire()
         try:
-            self.lock.acquire()
             settings = json.loads(open(self.settings_path).read())
             subs = sorted(settings.get('subs'))
             response += (
@@ -423,11 +442,17 @@ class AutoMemer:
             self.lock.release()
         return response
 
-    def _command_set_threshold(self, command):
+    def _command_set_threshold(self, command, mode=None):
+        command_str = 'set'
+        if mode =='+':
+            command_str = 'increase'
         response = ""
         command = command.lower().split()
         if len(command) not in [3, 4]:
-            response += "command must be in the form 'set threshold {threshold} <optional-sub>'"
+            response += (
+                "command must be in the form '{change} threshold {threshold} <optional-sub>'"
+                .format(change=command_str)
+            )
         elif len(command) == 3 or command[-1].lower() == 'global':
             threshold = command[2]
             try:
@@ -435,10 +460,10 @@ class AutoMemer:
             except ValueError:
                 response += "{threshold} is not a valid integer".format(threshold=threshold)
             else:
-                old_threshold = self._command_set_threshold_to(threshold)
+                old_t, new_t = self._command_set_threshold_to(threshold, mode=mode)
                 response += (
                     "The global threshold has been set to *{threshold}*! (previously {old})"
-                    .format(threshold=threshold, old=old_threshold)
+                    .format(threshold=new_t, old=old_t)
                 )
         else:
             sub = command[-1].lower()
@@ -453,26 +478,33 @@ class AutoMemer:
                 except ValueError:
                     response += "{threshold} is not a valid integer".format(threshold=threshold)
                 else:
-                    old_threshold = self._command_set_threshold_to(threshold, sub)
+                    old_t, new_t = self._command_set_threshold_to(threshold, sub=sub, mode=mode)
                     response += (
                         "The threshold upvotes for _{sub}_ has been set to *{threshold}*! (previously {old})"
-                        .format(sub=sub, threshold=threshold, old=old_threshold)
+                        .format(sub=sub, threshold=new_t, old=old_t)
                     )
         return response
 
-    def _command_set_threshold_to(self, upvote_value, sub='global'):
+    def _command_set_threshold_to(self, upvote_value, sub='global', mode=None):
         self.lock.acquire()
         try:
             settings = json.loads(open(self.settings_path).read())
-            old = settings['threshold_upvotes'].get(sub, 'global')
-            settings['threshold_upvotes'][sub] = upvote_value
+            old_t = settings['threshold_upvotes'].get(sub, 'global')
+            new_t = upvote_value
+            if mode == '+':
+                if old_t == 'global':
+                    new_t += settings['threshold_upvotes']['global']
+                else:
+                    new_t += old_t
+            new_t = max(1, new_t)
+            settings['threshold_upvotes'][sub] = new_t
             with open(self.settings_path, 'w') as f:
                 f.write(json.dumps(settings, indent=2))
-            return old
+            return old_t, new_t
         finally:
             self.lock.release()
 
-    def _command_details(self, command):
+    def _command_details(self, command, link_only=False):
         response = ""
         command = command.split()
         if len(command) != 2:
@@ -483,8 +515,11 @@ class AutoMemer:
             if meme_data is None:
                 response += "I could find any data for this url: `{}`, sorry\n".format(meme_url)
             else:
-                for key, val in sorted(meme_data.items()):
-                    response += "`{key}`: {data}\n".format(key=key, data=val)
+                if link_only:
+                    response += meme_data.get('link')
+                else:
+                    for key, val in sorted(meme_data.items()):
+                        response += "`{key}`: {data}\n".format(key=key, data=val)
         return response
 
     def _command_set_post_interval(self, command):
@@ -511,16 +546,18 @@ class AutoMemer:
                     response += "I see someone's trying to be a smart aleck. Enter a number greater than 0"
                 else:
                     self.lock.acquire()
-                    with open("memes/settings.txt", mode='r', encoding='utf-8') as s:
-                        settings = s.read()
-                    settings = json.loads(settings)
-                    settings['scrape_interval'] = interval
-                    global scrape_interval
-                    scrape_interval = interval
-                    with open("memes/settings.txt", mode='w', encoding='utf-8') as s:
-                        s.write(json.dumps(settings, indent=2))
-                    response += "scrape_interval has been set to *{}*!".format(str(interval))
-                    self.lock.release()
+                    try:
+                        with open("memes/settings.txt", mode='r', encoding='utf-8') as s:
+                            settings = s.read()
+                        settings = json.loads(settings)
+                        settings['scrape_interval'] = interval
+                        global scrape_interval
+                        scrape_interval = interval
+                        with open("memes/settings.txt", mode='w', encoding='utf-8') as s:
+                            s.write(json.dumps(settings, indent=2))
+                        response += "scrape_interval has been set to *{}*!".format(str(interval))
+                    finally:
+                        self.lock.release()
         return response
 
     def _command_pop(self, command):

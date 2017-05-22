@@ -28,8 +28,8 @@ def log_error(error):
 def scrape(lock=Lock()):
     """Queries Praw to scrape subs according to preferences file"""
     # loading in subreddit list
+    lock.acquire()
     try:
-        lock.acquire()
         with open(ABSOLUTE_PATH + 'settings.txt', mode='r', encoding='utf-8') as f:
             settings = json.loads(f.read())
         sub_names = settings.get('subs', ['me_irl'])
@@ -71,8 +71,8 @@ def scrape(lock=Lock()):
             sub_memes.append(data)
         reddit_memes.append(sub_memes)
 
+    lock.acquire()
     try:
-        lock.acquire()
         try:
             with open(meme_dict_path, mode='r', encoding='utf-8') as f:
                 meme_dict = json.loads(f.readline())  # meme_dict are the memes from today
