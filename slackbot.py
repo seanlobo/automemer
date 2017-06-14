@@ -1,5 +1,3 @@
-# https://www.fullstackpython.com/blog/build-first-slack-bot-python.html
-
 import os
 import shutil
 import sys
@@ -97,9 +95,9 @@ class AutoMemer:
                     added_memes_to_queue = False  # have we added the contents of scraped.json to our queue
                     scrape_interval = self.load_scrape_interval()
                     while True:
-                        command, channel = self.parse_slack_output(self.client.rtm_read())
-                        if command and channel:  # if a user tagged @automemer with a command
-                            self.handle_command(command, channel)
+                        slack_outputs = self.parse_slack_output(self.client.rtm_read())
+                        for output in slack_outputs:
+                            self.handle_command(output)
                         time_as_minutes = self.current_time_as_min()
                         if time_as_minutes % 10 == 0 and not scraped_reddit:
                             Process(target=scrape_reddit.scrape, args=(self.lock,)).start()
@@ -135,44 +133,47 @@ class AutoMemer:
         else:
             print("Connection failed. Invalid Slack token or bot ID?")
 
-    def handle_command(self, command, channel):
+    def handle_command(self, output):
         """
         Receives commands directed at the bot and determines if they
         are valid commands. If so, then acts on the commands. If not,
         returns back what it needs for clarification.
         """
+        command = output.get('@mention')
+        if command is None:
+            return
         response = '>{}\n'.format(command)
         # specific command responses
         if command.lower().startswith("add"):
-            response += self._command_add_sub(command)
+            response += self._command_add_sub(output)
         elif command.lower().startswith("delete"):
-            response += self._command_delete_sub(command)
+            response += self._command_delete_sub(output)
         elif command.lower().startswith("details"):
-            response += self._command_details(command)
+            response += self._command_details(output)
         elif command.lower() == "help":
             response += self._command_help()
         elif command.lower().startswith("increase threshold"):
-            response += self._command_set_threshold(command, mode="+")
+            response += self._command_set_threshold(output, mode="+")
         elif command.lower().startswith("list thresholds"):
             response += self._command_list_thresholds()
         elif command.lower().startswith("link"):
-            response += self._command_details(command, link_only=True)
+            response += self._command_details(output, link_only=True)
         elif command.lower() == "list settings":
             response += self._command_list_settings()
         elif command.lower() == "list subreddits":
             response += self._command_list_subs()
         elif command.lower().startswith("set threshold"):
-            response += self._command_set_threshold(command)
+            response += self._command_set_threshold(output)
         elif command.lower().startswith("set post interval"):
-            response += self._command_set_post_interval(command)
+            response += self._command_set_post_interval(output)
         elif command.lower().startswith("pop"):
-            reply = self._command_pop(command)
+            reply = self._command_pop(output)
             if reply == "":  # if we get an empty string back we've already popped the memes
                 return
             else:
                 response += reply
         elif command.lower().startswith('num-memes'):
-            response += self._command_num_memes(command)
+            response += self._command_num_memes(output)
         elif command.lower() == "kill":
             slack_client.api_call("chat.postMessage", channel=MEME_SPAM_CHANNEL,
                                   text="have it your way", as_user=True)
@@ -187,24 +188,11 @@ class AutoMemer:
                 as_user=True
             )
             return
-        elif command.lower().startswith("users.list"):
-            response = type(
-                self.client.api_call("users.list")
-            )
-            self.client.api_call(
-                "chat.postMessage",
-                channel=channel,
-                text=response,
-                link_names=1,
-                as_user=True
-            )
-            return
-
         else:  # a default response
             response = (
                 '>*' + command + "*\nI don't know this command :dealwithitparrot:\n"
             )
-        self.messages.push((channel, response))
+        self.messages.push((output['channel'], response))
 
     def load_scrape_interval(self):
         self.lock.acquire()
@@ -228,9 +216,6 @@ class AutoMemer:
     def add_new_memes_to_queue(self, limit=15, user_prompt=False):
         _, postable = self.count_memes()
         self.lock.acquire()
-        if sum(postable.values()) == 0 and user_prompt:
-            self.messages.push((MEME_SPAM_CHANNEL, 'Sorry, we ran out of memes :('))
-            return
         try:
             with open(self.scraped_path, mode='r', encoding='utf-8') as f:
                 text = f.read()
@@ -247,7 +232,8 @@ class AutoMemer:
 
             list_of_subs = list(memes_by_sub.keys())
             sub_ind = 0
-            while limit > 0 and sum(len(lst) for lst in memes_by_sub) > 0:  # while we want and have more memes to pop
+            while limit > 0 and sum(len(lst) for lst in memes_by_sub.values()) > 0:
+                # while we want and have more memes to pop
                 sub = list_of_subs[sub_ind]
                 sub_threshold = thresholds.get(sub.lower(), thresholds['global'])
                 while memes_by_sub[sub]:  # while there are memes from this sub
@@ -312,9 +298,9 @@ class AutoMemer:
              for output in output_list:
                  if output and 'text' in output and self.at_bot in output['text']:
                      # return text after the @ mention, whitespace removed
-                     return output['text'].split(self.at_bot)[1].strip(), \
-                           output['channel']
-         return None, None
+                     output['@mention'] = output['text'].split(self.at_bot)[1].strip()
+
+         return output_list
 
 
     def count_memes(self):
@@ -350,9 +336,9 @@ class AutoMemer:
             text += '`{}` - {}\n'.format(command, description)
         return text
 
-    def _command_add_sub(self, command):
+    def _command_add_sub(self, output):
         response = ""
-        command = command.lower().split()
+        command = output.get('@mention').lower().split()
         if len(command) != 2:
             response += "command must be in the form `add [name]`"
         else:
@@ -368,9 +354,9 @@ class AutoMemer:
             response += "_/r/{}_ has been added!".format(command)
         return response
 
-    def _command_delete_sub(self, command):
+    def _command_delete_sub(self, output):
         response = ""
-        command = command.lower().split()
+        command = output.get('@mention').lower().split()
         if len(command) != 2:
             response += "command must be in the form `delete [name]`"
         else:
@@ -442,12 +428,12 @@ class AutoMemer:
             self.lock.release()
         return response
 
-    def _command_set_threshold(self, command, mode=None):
+    def _command_set_threshold(self, output, mode=None):
         command_str = 'set'
         if mode =='+':
             command_str = 'increase'
         response = ""
-        command = command.lower().split()
+        command = output.get('@mention').lower().split()
         if len(command) not in [3, 4]:
             response += (
                 "command must be in the form '{change} threshold {threshold} <optional-sub>'"
@@ -504,9 +490,9 @@ class AutoMemer:
         finally:
             self.lock.release()
 
-    def _command_details(self, command, link_only=False):
+    def _command_details(self, output, link_only=False):
         response = ""
-        command = command.split()
+        command = output.get('@mention').split()
         if len(command) != 2:
             response += "command must be in the form `details <meme_url>`\n"
         else:
@@ -524,7 +510,7 @@ class AutoMemer:
 
     def _command_set_post_interval(self, command):
         response = ""
-        interval = command.split()
+        interval = output.get('@mention').split()
         if len(interval) != 4:
             response += "command must be in the form `set post interval <integer>`"
         else:
@@ -560,9 +546,9 @@ class AutoMemer:
                         self.lock.release()
         return response
 
-    def _command_pop(self, command):
+    def _command_pop(self, output):
         response = ""
-        command = command.split()
+        command = output.get('@mention').split()
         if len(command) == 2:
             try:
                 limit = int(command[1])
@@ -578,9 +564,9 @@ class AutoMemer:
 
         return response
 
-    def _command_num_memes(self, command):
+    def _command_num_memes(self, output):
         response = ""
-        command = command.lower().split()
+        command = output.get('@mention').lower().split()
         by_sub = 'by_sub' in command
         dank_only = 'dank_only' in command
         total, postable = self.count_memes()
