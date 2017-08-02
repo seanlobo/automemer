@@ -1,14 +1,14 @@
+import datetime
+import html
+import json
 import os
-import shutil
 import sys
 import time
-import datetime
-import ast
-import json
 import traceback
-import html
+import websocket
 from collections import Counter, defaultdict
 from multiprocessing import Lock, Process
+from websocket import WebSocketConnectionClosedException
 
 from slackclient import SlackClient
 
@@ -20,27 +20,31 @@ class AutoMemer:
     bot_commands = {
         "add <sub>": "Adds <sub> to the list of subreddits scraped",
         "delete <sub>": "Deletes <sub> from the list of subreddits scraped",
-        "details <meme_url>": "Gives details for a meme if meme_url has been scraped",
+        "details <meme_url>": (
+            "Gives details for a meme if meme_url has been scraped",
+        ),
         "help": "Prints a list of commands and short descriptions",
         "increase threshold <threshold> {optional_subreddit}": (
-            "Sets threshold for {optional_subreddit} to the old threshold + or - the <threshold> "
-            "value passed. Defaults to global"
+            "Sets threshold for {optional_subreddit} to the old threshold + "
+            "or - the <threshold> value passed. Defaults to global"
         ),
-        "kill": "Kills automemer. Program is stopped, no scraping, no posting. ded :rip:",
+        "kill": "Kills automemer. Program is stopped, no scraping, no posting",
         "link <url>": "Prints the link associated with the url passed",
         "list settings": "Prints out all settings",
         "list subreddits": "Prints a list of subreddits currently being scraped",
         "list thresholds": "Prints the thresholds for subs",
         "num-memes {dank_only} {by_sub}": (
-            "Prints the number of memes currently waiting to be posted. To only post dank memes use "
-            "`num-memes dank_only`, to get a breakdown by subreddit use `num-memes by_sub`"
+            "Prints the number of memes currently waiting to be posted. "
+            "To only post dank memes use `num-memes dank_only`, to get a "
+            "breakdown by subreddit use `num-memes by_sub`"
         ),
         "pop {num}": "pops {num} memes (or as many as there are) from the queue",
         "set scrape interval <int>": "sets the scrape interval to <int> minutes",
         "set threshold <threshold> {optional_subreddit}": (
-            "Sets threshold upvotes a meme must meet to be scraped. If {optional_subreddit} "
-            "is specified, sets <threshold> specifically for that sub, otherwise a global "
-            "threshold is set (applied to subs without a specific threshold)"
+            "Sets threshold upvotes a meme must meet to be scraped. If "
+            "{optional_subreddit} is specified, sets <threshold> specifically "
+            "for that sub, otherwise a global threshold is set (applied to "
+            "subs without a specific threshold)"
         ),
 
     }
@@ -91,24 +95,30 @@ class AutoMemer:
             for i in range(1, num_tries + 1):
                 try:
                     print("AutoMemer connected and running!")
-                    scraped_reddit = False  # have we scraped reddit yet
-                    added_memes_to_queue = False  # have we added the contents of scraped.json to our queue
+                    scraped_reddit = False
+                    # have we added the contents of scraped.json to our queue
+                    added_memes_to_queue = False
                     scrape_interval = self.load_scrape_interval()
                     while True:
-                        slack_outputs = self.parse_slack_output(self.client.rtm_read())
+                        slack_outputs = self.parse_slack_output(
+                                self.client.rtm_read())
                         for output in slack_outputs:
                             self.handle_command(output)
                         time_as_minutes = self.current_time_as_min()
                         if time_as_minutes % 10 == 0 and not scraped_reddit:
-                            Process(target=scrape_reddit.scrape, args=(self.lock,)).start()
+                            Process(target=scrape_reddit.scrape,
+                                    args=(self.lock,)).start()
                             scraped_reddit = True  # we just added the memes
-                        elif time_as_minutes % 10 > 0:  # the minute passed, reset scraped_reddit
+                        elif time_as_minutes % 10 > 0:
+                            # the minute passed, reset scraped_reddit
                             scraped_reddit = False
 
-                        if time_as_minutes % scrape_interval == 0 and not added_memes_to_queue:
+                        if (time_as_minutes % scrape_interval == 0 and
+                                not added_memes_to_queue):
                             self.add_new_memes_to_queue()
                             added_memes_to_queue = True
-                        elif time_as_minutes % scrape_interval > 0 and added_memes_to_queue:
+                        elif (time_as_minutes % scrape_interval > 0 and
+                                added_memes_to_queue):
                             added_memes_to_queue = False
 
                         self.pop_queue()
@@ -122,12 +132,16 @@ class AutoMemer:
                     if i == num_tries:
                         return e
                     text = (
-                        "error!!! I'm dying check me\n`{}`\n".format(str(e)) +
-                        "_I have resurrected myself {} out of 2 times, to kill me use the `kill` command_"
-                        .format(str(i))
+                        "error!!! I'm dying check me\n`{}`\n"
+                        "_I have resurrected myself {} out of 2 times, to "
+                        "kill me use the `kill` command_"
+                        .format(str(e), str(i))
                     )
-                    self.client.api_call("chat.postMessage", channel=MEME_SPAM_CHANNEL,
-                                          text=text, as_user=True)
+                    self.client.api_call(
+                        "chat.postMessage",
+                        channel=MEME_SPAM_CHANNEL,
+                        text=text,
+                        as_user=True)
                     time.sleep(READ_WEBSOCKET_DELAY)
 
         else:
@@ -146,7 +160,8 @@ class AutoMemer:
         # specific command responses
         if command.lower().startswith("add"):
             response += self._command_add_sub(output)
-        elif command.lower().startswith("delete"):
+        elif command.lower().startswith("delete") \
+                or command.lower().startswith('remove'):
             response += self._command_delete_sub(output)
         elif command.lower().startswith("details"):
             response += self._command_details(output)
@@ -168,21 +183,22 @@ class AutoMemer:
             response += self._command_set_post_interval(output)
         elif command.lower().startswith("pop"):
             reply = self._command_pop(output)
-            if reply == "":  # if we get an empty string back we've already popped the memes
+            if reply == "":
+                # if we get an empty string back we've already popped the memes
                 return
             else:
                 response += reply
         elif command.lower().startswith('num-memes'):
             response += self._command_num_memes(output)
         elif command.lower() == "kill":
-            slack_client.api_call("chat.postMessage", channel=MEME_SPAM_CHANNEL,
+            self.client.api_call("chat.postMessage", channel=MEME_SPAM_CHANNEL,
                                   text="have it your way", as_user=True)
-            sys.exit()
+            sys.exit(0)
         elif command.lower().startswith("echo "):
             response = ''.join(command.split()[1:])
             self.client.api_call(
                 "chat.postMessage",
-                channel=channel,
+                channel=output['channel'],
                 text=response,
                 link_names=1,
                 as_user=True
@@ -190,7 +206,8 @@ class AutoMemer:
             return
         else:  # a default response
             response = (
-                '>*' + command + "*\nI don't know this command :dealwithitparrot:\n"
+                ">*{}*\nI don't know this command :dealwithitparrot:\n"
+                .format(command)
             )
         self.messages.push((output['channel'], response))
 
@@ -213,53 +230,61 @@ class AutoMemer:
         finally:
             self.lock.release()
 
-    def add_new_memes_to_queue(self, limit=15, user_prompt=False):
+    def add_new_memes_to_queue(self, limit=10, user_prompt=False):
         _, postable = self.count_memes()
         self.lock.acquire()
         try:
             with open(self.scraped_path, mode='r', encoding='utf-8') as f:
-                text = f.read()
+                scraped = f.read()
             with open(self.all_memes_path, 'r', encoding='utf-8') as f:
                 all_memes = f.read()
             all_memes = json.loads(all_memes)
-            memes = json.loads(text)
+            scraped_memes = json.loads(scraped)
             with open(self.settings_path, mode='r', encoding='utf-8') as f:
                 settings = json.loads(f.read())
             thresholds = settings['threshold_upvotes']
-            memes_by_sub = defaultdict(lambda: list())
-            for post, data in sorted(list(memes.items()), key=lambda x: x[1]['created_utc']):
+            memes_by_sub = defaultdict(list)
+            for post, data in sorted(list(scraped_memes.items()),
+                                     key=lambda x: x[1]['created_utc']):
                 memes_by_sub[data['sub']].append(data)
 
             list_of_subs = list(memes_by_sub.keys())
             sub_ind = 0
-            while limit > 0 and sum(len(lst) for lst in memes_by_sub.values()) > 0:
+            while limit > 0 and sum(len(lst)
+                                    for lst in memes_by_sub.values()) > 0:
                 # while we want and have more memes to pop
                 sub = list_of_subs[sub_ind]
                 sub_threshold = thresholds.get(sub.lower(), thresholds['global'])
                 while memes_by_sub[sub]:  # while there are memes from this sub
                     meme = memes_by_sub[sub].pop(0)
-                    del memes[meme['url']]
+                    del scraped_memes[meme['url']]
                     ups = int(meme.get('highest_ups'))
                     if ups > sub_threshold:  # this meme is DAAANK
-                        all_memes[meme['url']]['posted_to_slack'] = True
+                        # find appropriate meme from MEMES.json and update
+                        for m in all_memes[meme['url']]:
+                            if m.get('id') == meme['id']:
+                                m['posted_to_slack'] = True
+
                         limit -= 1
                         meme_text = (
-                            "*{title}* _(from /r/{sub})_ `{ups:,d}`\n{url}".format(
-                            title=meme.get('title'),
-                            sub=sub,
-                            ups=ups,
-                            url=meme['url'])
+                            "*{title}* _(from /r/{sub})_ `{ups:,d}`\n{url}"
+                            .format(
+                                title=meme.get('title'),
+                                sub=sub,
+                                ups=ups,
+                                url=meme['url'])
                         )
                         self.messages.push((MEME_SPAM_CHANNEL, meme_text))
                         break
                 sub_ind = (sub_ind + 1) % len(list_of_subs)
 
             with open(self.scraped_path, mode='w', encoding='utf-8') as f:
-                f.write(json.dumps(memes, indent=2))
+                f.write(json.dumps(scraped_memes, indent=2))
             with open(self.all_memes_path, mode='w', encoding='utf-8') as f:
-                f.write(json.dumps(all_memes))
+                f.write(json.dumps(all_memes, indent=2))
             if 0 < limit and user_prompt:
-                self.messages.push((MEME_SPAM_CHANNEL, 'Sorry, we ran out of memes :('))
+                self.messages.push((MEME_SPAM_CHANNEL,
+                                    'Sorry, we ran out of memes :('))
         except Exception as e:
             self.messages.push((MEME_SPAM_CHANNEL, (
                 "There was an error :sadparrot:\n"
@@ -276,32 +301,40 @@ class AutoMemer:
                 self.client.api_call("chat.postMessage", channel=channel,
                                       text=response, as_user=True)
             else:
-                d = dict(api="chat.postMessage", channel=channel, text=response, as_user=True)
-                d['time'] = datetime.datetime.now().isoformat()
+                d = {
+                    'api': "chat.postMessage",
+                    'channel': channel,
+                    'text': response,
+                    'as_user': True,
+                    'time': datetime.datetime.now().isoformat(),
+                }
                 with open(self.log_file, 'a') as f:
                     f.write(json.dumps(d, indent=2) + ',\n')
 
     def parse_slack_output(self, slack_rtm_output):
-         """
-         the Slack Real Time Messaging API is an events firehose.
-         this parsing function returns None unless a message is
-         directed at the Bot, based on its ID.
-         """
-         if slack_rtm_output:
-             for output in slack_rtm_output:
-                 if 'user' in output:
-                     output['username'] = self._get_name(output['user'])
-             if output.get('type') not in ['presence_change', 'reconnect_url']:
-                print(json.dumps(slack_rtm_output, indent=2))
-         output_list = slack_rtm_output
-         if output_list and len(output_list) > 0:
-             for output in output_list:
-                 if output and 'text' in output and self.at_bot in output['text']:
-                     # return text after the @ mention, whitespace removed
-                     output['@mention'] = output['text'].split(self.at_bot)[1].strip()
+        """
+        the Slack Real Time Messaging API is an events firehose.
+        this parsing function returns None unless a message is
+        directed at the Bot, based on its ID.
+        """
+        if slack_rtm_output:
+            for output in slack_rtm_output:
+                output['time'] = datetime.datetime.now().isoformat()
+                if 'user' in output:
+                    output['username'] = self._get_name(output['user'])
+                if 'text' in output and self.at_bot in output['text']:
+                    # return text after the @ mention, whitespace removed
+                    output['@mention'] = output['text'].split(self.at_bot)[1].strip()
 
-         return output_list
+            self.log_slack_rtm(slack_rtm_output)
+        return slack_rtm_output
 
+    def log_slack_rtm(self, message):
+        if not isinstance(message, str):
+            message = json.dumps(message, indent=2)
+
+        with open(self.log_file, 'a') as f:
+            f.write(message + ',\n')
 
     def count_memes(self):
         self.lock.acquire()
@@ -502,10 +535,13 @@ class AutoMemer:
                 response += "I could find any data for this url: `{}`, sorry\n".format(meme_url)
             else:
                 if link_only:
-                    response += meme_data.get('link')
+                    for meme in meme_data:
+                        response += meme.get('link')
                 else:
-                    for key, val in sorted(meme_data.items()):
-                        response += "`{key}`: {data}\n".format(key=key, data=val)
+                    for meme in meme_data:
+                        for key, val in sorted(meme.items()):
+                            response += "`{key}`: {data}\n".format(key=key, data=val)
+                        response += '\n'
         return response
 
     def _command_set_post_interval(self, command):
@@ -634,5 +670,9 @@ if __name__ == "__main__":
     MEME_SPAM_CHANNEL = os.environ.get("MEME_SPAM_CHANNEL")
 
     meme_bot = AutoMemer(BOT_ID, MEME_SPAM_CHANNEL)
-    meme_bot.run()
+    try:
+        meme_bot.run()
+    except websocket._exceptions.WebSocketConnectionClosedException:
+        import sys
+        sys.exit()
 

@@ -65,7 +65,7 @@ def scrape(lock=Lock()):
                 'sub' : post.subreddit.display_name,
                 'upvote_ratio' : post.upvote_ratio,
                 'recorded' : datetime.datetime.utcnow().isoformat(),
-                'created_utc' : datetime.datetime.fromtimestamp(post.created).isoformat(),
+                'created_utc' : datetime.datetime.fromtimestamp(post.created_utc).isoformat(),
                 'last_updated' : datetime.datetime.utcnow().isoformat(),
             }
             sub_memes.append(data)
@@ -75,7 +75,7 @@ def scrape(lock=Lock()):
     try:
         try:
             with open(meme_dict_path, mode='r', encoding='utf-8') as f:
-                meme_dict = json.loads(f.readline())  # meme_dict are the memes from today
+                meme_dict = json.loads(f.read())
         except Exception as e:  # except any error and print the error to a file
             log_error(e)
             meme_dict = dict()
@@ -95,21 +95,38 @@ def scrape(lock=Lock()):
             sub_threshold = thresholds.get(sub, thresholds.get('global'))
             try:
                 for post in reddit_memes[i]:
-                    if post['url'] not in meme_dict:
-                        meme_dict[post['url']] = post
+                    if post['url'] not in meme_dict:  # add this meme to our list
+                        meme_dict[post['url']] = [post]
                         if not post['over_18']:
                             new_memes[post['url']] = post
-                    else:
-                        meme_dict[post['url']]['highest_ups'] = max(
-                                meme_dict[post['url']]['highest_ups'],
-                                post['ups']
-                        )
-                        meme_dict[post['url']]['ups'] = post['ups']
-                        meme_dict[post['url']]['upvote_ratio'] = post['upvote_ratio']
-                        if (meme_dict[post['url']]['highest_ups'] > sub_threshold and
-                                not meme_dict[post['url']].get('posted_to_slack', True) and
+                    else:  # this meme (url) is old
+                        previous_versions = meme_dict[post['url']]
+                        old_meme, ind = None, None
+                        for i, prev in enumerate(previous_versions):
+                            if prev.get('id') == post['id']:
+                                old_meme = prev
+                                ind = i
+                        if old_meme is None:  # this post is new ( a new post to an old url), so add it to the list
+                            previous_versions.append(post)
+                        else:  # this exact post was previously recorded, update the values
+                            post['highest_ups'] = max(
+                                old_meme.get('highest_ups', 0),
+                                post['ups'],
+                                post['highest_ups']
+                            )
+                            post['posted_to_slack'] = old_meme.get('posted_to_slack', False)
+                            post['recorded'] = old_meme.get('recorded', post['recorded'])
+                            meme_dict[post['url']][ind] = post
+
+                        previously_posted = False
+                        for prev in previous_versions:
+                            if prev.get('posted_to_slack'):
+                                previously_posted = True
+                                break
+                        if (post['highest_ups'] > sub_threshold and
+                                not previously_posted and
                                 not post['over_18']):
-                            new_memes[post['url']] = meme_dict[post['url']]
+                            new_memes[post['url']] = post
             except Exception as e:
                 log_error(e)
 
@@ -119,7 +136,7 @@ def scrape(lock=Lock()):
 
         # writing updated meme_dict to file
         with open(meme_dict_path, mode='w', encoding='utf-8') as f:
-            f.write(json.dumps(meme_dict))
+            f.write(json.dumps(meme_dict, indent=2))
     finally:
         lock.release()
 
@@ -131,20 +148,23 @@ def update_meme(meme_url, lock):
         with open(ABSOLUTE_PATH + 'MEMES.json', 'r', encoding='utf-8') as f:
             memes = f.read()
         memes = json.loads(memes)
-        meme_data = memes.get(meme_url)
-        if meme_data is None or 'id' not in meme_data:  # can't update without the meme and id
+        matching_memes = memes.get(meme_url)
+        if matching_memes is None:  # can't update without the meme and id
             return
-
-        post                      = reddit.submission(id=meme_data['id'])
-        meme_data['ups']          = post.ups
-        meme_data['highest_ups']  = max(meme_data.get('highest_ups', 0), post.ups)
-        meme_data['upvote_ratio'] = post.upvote_ratio
-        meme_data['last_updated'] = datetime.datetime.utcnow().isoformat()
+        for meme_data in matching_memes:
+            if 'id' in meme_data:
+                post                      = reddit.submission(id=meme_data['id'])
+                meme_data['ups']          = post.ups
+                meme_data['highest_ups']  = max(meme_data.get('highest_ups', 0), post.ups)
+                meme_data['upvote_ratio'] = post.upvote_ratio
+                meme_data['last_updated'] = datetime.datetime.utcnow().isoformat()
 
         with open(ABSOLUTE_PATH + 'MEMES.json', 'w', encoding='utf-8') as f:
             f.write(json.dumps(memes))
 
-        return meme_data
+        return matching_memes
+    except Exception as e:
+        log_error(e)
     finally:
         lock.release()
 
