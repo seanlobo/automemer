@@ -18,3 +18,7 @@ if __name__ == '__main__':
                 postable[sub] += 1
     print(json.dumps(total, indent=2))
     print(json.dumps(postable, indent=2))
+
+    print()
+    print('total: {:,}'.format(sum(total.values())))
+    print('postable: {:,}'.format(sum(postable.values())))

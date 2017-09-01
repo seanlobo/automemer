@@ -3,6 +3,7 @@ import html
 import json
 import os
 import sys
+import sqlite3
 import time
 import traceback
 import websocket
@@ -59,19 +60,17 @@ class AutoMemer:
         self.debug      = debug
         self.users_list = None
 
+        self.conn   = sqlite3.connect('memes/memes.sqlite3')
+        self.cursor = self.conn.cursor()
+
         self.log_file       = './memes/log_file.txt'
         self.scraped_path   = './memes/scraped.json'
         self.settings_path  = './memes/settings.txt'
-        self.all_memes_path = './memes/MEMES.json'
 
         # creating directories and files
         os.makedirs('memes', exist_ok=True)
         if not os.path.isfile('memes/errors.txt'):
             open('memes/errors.txt', 'x').close()
-        if not os.path.isfile(self.all_memes_path):
-            file = open(self.all_memes_path, 'x')
-            file.write(json.dumps({}))
-            file.close()
         if not os.path.isfile(self.scraped_path):
             file = open(self.scraped_path, 'x')
             file.write(json.dumps({}))
@@ -106,8 +105,10 @@ class AutoMemer:
                             self.handle_command(output)
                         time_as_minutes = self.current_time_as_min()
                         if time_as_minutes % 10 == 0 and not scraped_reddit:
-                            Process(target=scrape_reddit.scrape,
-                                    args=(self.lock,)).start()
+                            Process(
+                                target=scrape_reddit.scrape,
+                                args=(self.cursor, self.conn, self.lock)
+                            ).start()
                             scraped_reddit = True  # we just added the memes
                         elif time_as_minutes % 10 > 0:
                             # the minute passed, reset scraped_reddit
@@ -230,15 +231,13 @@ class AutoMemer:
         finally:
             self.lock.release()
 
-    def add_new_memes_to_queue(self, limit=10, user_prompt=False):
+    def add_new_memes_to_queue(self, limit=None, user_prompt=False):
         _, postable = self.count_memes()
+        limit = limit or max(15, int(0.2 * sum(postable.values())))
         self.lock.acquire()
         try:
             with open(self.scraped_path, mode='r', encoding='utf-8') as f:
                 scraped = f.read()
-            with open(self.all_memes_path, 'r', encoding='utf-8') as f:
-                all_memes = f.read()
-            all_memes = json.loads(all_memes)
             scraped_memes = json.loads(scraped)
             with open(self.settings_path, mode='r', encoding='utf-8') as f:
                 settings = json.loads(f.read())
@@ -250,8 +249,7 @@ class AutoMemer:
 
             list_of_subs = list(memes_by_sub.keys())
             sub_ind = 0
-            while limit > 0 and sum(len(lst)
-                                    for lst in memes_by_sub.values()) > 0:
+            while limit > 0 and any(memes_by_sub.values()):
                 # while we want and have more memes to pop
                 sub = list_of_subs[sub_ind]
                 sub_threshold = thresholds.get(sub.lower(), thresholds['global'])
@@ -260,17 +258,19 @@ class AutoMemer:
                     del scraped_memes[meme['url']]
                     ups = int(meme.get('highest_ups'))
                     if ups > sub_threshold:  # this meme is DAAANK
-                        # find appropriate meme from MEMES.json and update
-                        for m in all_memes[meme['url']]:
-                            if m.get('id') == meme['id']:
-                                m['posted_to_slack'] = True
+                        scrape_reddit.set_posted_to_slack(
+                            self.cursor,
+                            meme['id'],
+                            self.conn,
+                            True
+                        )
 
                         limit -= 1
                         meme_text = (
                             "*{title}* _(from /r/{sub})_ `{ups:,d}`\n{url}"
                             .format(
-                                title=meme.get('title'),
-                                sub=sub,
+                                title=meme.get('title').strip('*'),
+                                sub=sub.strip('_'),
                                 ups=ups,
                                 url=meme['url'])
                         )
@@ -280,8 +280,6 @@ class AutoMemer:
 
             with open(self.scraped_path, mode='w', encoding='utf-8') as f:
                 f.write(json.dumps(scraped_memes, indent=2))
-            with open(self.all_memes_path, mode='w', encoding='utf-8') as f:
-                f.write(json.dumps(all_memes, indent=2))
             if 0 < limit and user_prompt:
                 self.messages.push((MEME_SPAM_CHANNEL,
                                     'Sorry, we ran out of memes :('))
@@ -530,13 +528,15 @@ class AutoMemer:
             response += "command must be in the form `details <meme_url>`\n"
         else:
             meme_url = html.unescape(command[1][1:-1])
-            meme_data = scrape_reddit.update_meme(meme_url, self.lock)
+            meme_data = scrape_reddit.update_meme(
+                self.cursor, self.conn, meme_url, self.lock
+            )
             if meme_data is None:
                 response += "I could find any data for this url: `{}`, sorry\n".format(meme_url)
             else:
                 if link_only:
                     for meme in meme_data:
-                        response += meme.get('link')
+                        response += meme.get('link') + '\n'
                 else:
                     for meme in meme_data:
                         for key, val in sorted(meme.items()):
@@ -672,7 +672,16 @@ if __name__ == "__main__":
     meme_bot = AutoMemer(BOT_ID, MEME_SPAM_CHANNEL)
     try:
         meme_bot.run()
-    except websocket._exceptions.WebSocketConnectionClosedException:
+    except websocket._exceptions.WebSocketConnectionClosedException as e:
+
+        log_error(e)
+
         import sys
         sys.exit()
+    except Exception as e:
+        log_error(e)
+
+        with open("memes/errors.txt", 'a') as f:
+            f.write("Didn't catch websocket error, we got a {} error".format(type(e).__name__))
+        raise e
 
