@@ -90,61 +90,59 @@ class AutoMemer:
         READ_WEBSOCKET_DELAY = 1  # 1 second delay between reading from firehose
         if self.client.rtm_connect():
             self.users_list = self.client.api_call("users.list")
-            num_tries = 3
-            for i in range(1, num_tries + 1):
-                try:
-                    print("AutoMemer connected and running!")
-                    scraped_reddit = False
-                    # have we added the contents of scraped.json to our queue
-                    added_memes_to_queue = False
-                    scrape_interval = self.load_scrape_interval()
-                    while True:
-                        slack_outputs = self.parse_slack_output(
-                                self.client.rtm_read())
-                        for output in slack_outputs:
-                            self.handle_command(output)
-                        time_as_minutes = self.current_time_as_min()
-                        if time_as_minutes % 10 == 0 and not scraped_reddit:
-                            Process(
-                                target=scrape_reddit.scrape,
-                                args=(self.cursor, self.conn, self.lock)
-                            ).start()
-                            scraped_reddit = True  # we just added the memes
-                        elif time_as_minutes % 10 > 0:
-                            # the minute passed, reset scraped_reddit
-                            scraped_reddit = False
+            try:
+                print("AutoMemer connected and running!")
+                scraped_reddit = False
+                # have we added the contents of scraped.json to our queue
+                added_memes_to_queue = False
+                scrape_interval = self.load_scrape_interval()
+                while True:
+                    slack_outputs = self.parse_slack_output(
+                            self.client.rtm_read())
+                    for output in slack_outputs:
+                        self.handle_command(output)
+                        # Process(
+                        #     target=self.handle_command,
+                        #     args=(output,)
+                        # ).start()
+                    time_as_minutes = self.current_time_as_min()
+                    if time_as_minutes % 10 == 0 and not scraped_reddit:
+                        Process(
+                            target=scrape_reddit.scrape,
+                            args=(self.cursor, self.conn, self.lock)
+                        ).start()
+                        scraped_reddit = True  # we just added the memes
+                    elif time_as_minutes % 10 > 0:
+                        # the minute passed, reset scraped_reddit
+                        scraped_reddit = False
 
-                        if (time_as_minutes % scrape_interval == 0 and
-                                not added_memes_to_queue):
-                            self.add_new_memes_to_queue()
-                            added_memes_to_queue = True
-                        elif (time_as_minutes % scrape_interval > 0 and
-                                added_memes_to_queue):
-                            added_memes_to_queue = False
+                    if (time_as_minutes % scrape_interval == 0 and
+                            not added_memes_to_queue):
+                        self.add_new_memes_to_queue()
+                        added_memes_to_queue = True
+                    elif (time_as_minutes % scrape_interval > 0 and
+                            added_memes_to_queue):
+                        added_memes_to_queue = False
 
-                        self.pop_queue()
-                        time.sleep(READ_WEBSOCKET_DELAY)
-                except Exception as e:
-                    self.lock.acquire()
-                    try:
-                        log_error(e)
-                    finally:
-                        self.lock.release()
-                    if i == num_tries:
-                        return e
-                    text = (
-                        "error!!! I'm dying check me\n`{}`\n"
-                        "_I have resurrected myself {} out of 2 times, to "
-                        "kill me use the `kill` command_"
-                        .format(str(e), str(i))
-                    )
-                    self.client.api_call(
-                        "chat.postMessage",
-                        channel=MEME_SPAM_CHANNEL,
-                        text=text,
-                        as_user=True)
+                    self.pop_queue()
                     time.sleep(READ_WEBSOCKET_DELAY)
-
+            except Exception as e:
+                self.lock.acquire()
+                try:
+                    log_error(e)
+                finally:
+                    self.lock.release()
+                text = (
+                    "error!!! I'm dying check me"
+                    .format(str(e))
+                )
+                self.client.api_call(
+                    "chat.postMessage",
+                    channel=MEME_SPAM_CHANNEL,
+                    text=text,
+                    as_user=True)
+                time.sleep(READ_WEBSOCKET_DELAY)
+                raise e
         else:
             print("Connection failed. Invalid Slack token or bot ID?")
 
@@ -672,7 +670,7 @@ if __name__ == "__main__":
     meme_bot = AutoMemer(BOT_ID, MEME_SPAM_CHANNEL)
     try:
         meme_bot.run()
-    except websocket._exceptions.WebSocketConnectionClosedException as e:
+    except (websocket._exceptions.WebSocketConnectionClosedException|BrokenPipeError) as e:
 
         log_error(e)
 
@@ -684,4 +682,6 @@ if __name__ == "__main__":
         with open("memes/errors.txt", 'a') as f:
             f.write("Didn't catch websocket error, we got a {} error".format(type(e).__name__))
         raise e
+
+    sys.exit(0)
 
