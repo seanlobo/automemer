@@ -231,7 +231,7 @@ class AutoMemer:
 
     def add_new_memes_to_queue(self, limit=None, user_prompt=False):
         _, postable = self.count_memes()
-        limit = limit or max(15, int(0.2 * sum(postable.values())))
+        limit = limit or max(10, int(0.2 * sum(postable.values())))
         self.lock.acquire()
         try:
             with open(self.scraped_path, mode='r', encoding='utf-8') as f:
