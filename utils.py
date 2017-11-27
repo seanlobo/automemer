@@ -1,4 +1,34 @@
+import logging
+import traceback
+from logging import handlers
+
+
+# set up logging
+logger = logging.getLogger(__name__)
+rfh = handlers.RotatingFileHandler(
+    'memes/automemer.log',
+    maxBytes=1024 * 1024 * 20,
+    backupCount=1
+)
+rfh.setLevel(logging.DEBUG)
+rfh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+logger.addHandler(rfh)
+
+
+def log_error(error):
+    """Writes the given error to a log file"""
+    error_type_string = type(error).__name__
+    traceback_string = traceback.format_exc()
+    logger.error("%s\n%s", error_type_string, traceback_string)
+
+
 def get_meme_data(cursor, meme_id):
+    """
+    Queries SQLite for data associated with the passed Reddit post id.
+    :param cursor: a database cursor object
+    :param meme_id: the id associated with a post on reddit / a row in the database
+    :return: a dictionary with the data for the appropriate post if it exists, else an empty dict
+    """
     cursor.execute(
         '''
         SELECT *
@@ -21,6 +51,13 @@ def get_meme_data(cursor, meme_id):
 
 
 def get_meme_data_from_url(cursor, url):
+    """
+    Queries SQLite for data associated with the given url
+    :param cursor: a database cursor object
+    :param url: a url for an image / post on Reddit
+    :return: a list of dictionaries corresponding to each post having the appropriate url,
+    or an empty list if no data matches.
+    """
     cursor.execute(
         '''
         SELECT *
@@ -43,6 +80,15 @@ def get_meme_data_from_url(cursor, url):
 
 
 def add_meme_data(cursor, meme_dict, connection, replace=False):
+    """
+    Inserts data for the passed dict into the database. Will always insert if
+    the data doesn't exist, will update existing data if replace=True, and do nothing
+    if replace=False
+    :param cursor: a database cursor object
+    :param meme_dict: a dictionary with data for a given meme
+    :param connection: a database connection object
+    :param replace: whether to replace existing data or do nothing when existing data is found
+    """
     replace_str = 'REPLACE' if replace else 'IGNORE'
     cursor.execute(
         '''
@@ -69,6 +115,13 @@ def add_meme_data(cursor, meme_dict, connection, replace=False):
 
 
 def update_meme_data(cursor, meme_dict, connection):
+    """
+    Updates the following fields in database for the row corresponding to meme_dict[id] :
+    ups, highest_ups, last_updated, posted_to_slack
+    :param cursor: a database cursor object
+    :param meme_dict: a dictionary with appropriate data for a meme
+    :param connection: a database connection object
+    """
     cursor.execute(
         '''
         UPDATE memes
@@ -87,3 +140,75 @@ def update_meme_data(cursor, meme_dict, connection):
     )
     connection.commit()
 
+
+def set_posted_to_slack(cursor, meme_id, connection, val):
+    """
+    Updates the value of row meme_id to have a posted_to_slack value of val. Should typically be used
+    to specify a meme has been posted (aka val = True)
+    :param cursor: a database cursor object
+    :param meme_id: the (Reddit / database row) id of the meme to update
+    :param connection: a database connection object
+    :param val: a boolean represnting whether the meme has been posted to reddit
+    """
+    cursor.execute(
+        '''
+        UPDATE memes
+        SET posted_to_slack = ?
+        WHERE id = ?
+        ''',
+        (val, meme_id)
+    )
+    connection.commit()
+
+
+def has_been_posted_to_slack(cursor, meme_dict):
+    """
+    Returns whether the passed meme has been posted to slack. NOTE: while `set_posted_to_slack`
+    only sets a single row (based on Reddit / database row id) this function returns True
+    if any row with the same url as the passed meme has been posted to slack.
+    :param cursor: a database cursor object
+    :param meme_dict: a dictionary with a url to check
+    :return:
+    """
+    cursor.execute(
+        '''
+        SELECT posted_to_slack
+        FROM memes
+        WHERE url = ?
+        ''',
+        (meme_dict['url'],)
+    )
+    values = cursor.fetchall()
+    for v in values:
+        if v[0]:
+            return True
+    return False
+
+
+def update_meme(cursor, connection, meme_url, lock):
+    """
+    Retrieves every meme matching the passed url, and queries Praw to update data.
+    Returns updated data
+    :param cursor: a database cursor object
+    :param connection: a database connection object
+    :param meme_url: a url to match memes' stored urls with in the database
+    :param lock: a multiprocessing.Lock object
+    :return: a list of memes whose urls matched the passed
+    """
+    lock.acquire()
+    try:
+        matching_memes = utils.get_meme_data_from_url(cursor, meme_url)
+        for meme_data in matching_memes:
+            post                      = reddit.submission(id=meme_data['id'])
+            meme_data['ups']          = post.ups
+            meme_data['highest_ups']  = max(meme_data.get('highest_ups', 0), post.ups)
+            meme_data['upvote_ratio'] = post.upvote_ratio
+            meme_data['last_updated'] = datetime.datetime.utcnow().isoformat()
+
+            utils.update_meme_data(cursor, meme_data, connection)
+
+        return matching_memes
+    except Exception as e:
+        log_error(e)
+    finally:
+        lock.release()

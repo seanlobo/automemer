@@ -3,7 +3,7 @@ if __name__ == '__main__':
     from collections import Counter
     with open('memes/scraped.json', 'r') as f:
         memes = json.loads(f.read())
-    with open('memes/settings.txt', 'r') as f:
+    with open('memes/settings.json', 'r') as f:
         settings = json.loads(f.read())
     thresholds = settings.get('threshold_upvotes')
     total, postable = Counter(), Counter()
