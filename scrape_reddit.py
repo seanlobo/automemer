@@ -107,6 +107,36 @@ def scrape(cursor, connection, lock=Lock()):
         lock.release()
 
 
+
+def update_reddit_meme(cursor, connection, meme_url, lock):
+    """
+    Retrieves every meme matching the passed url, and queries Praw to update data.
+    Returns updated data
+    :param cursor: a database cursor object
+    :param connection: a database connection object
+    :param meme_url: a url to match memes' stored urls with in the database
+    :param lock: a multiprocessing.Lock object
+    :return: a list of memes whose urls matched the passed
+    """
+    lock.acquire()
+    try:
+        matching_memes = utils.get_meme_data_from_url(cursor, meme_url)
+        for meme_data in matching_memes:
+            post                      = reddit.submission(id=meme_data['id'])
+            meme_data['ups']          = post.ups
+            meme_data['highest_ups']  = max(meme_data.get('highest_ups', 0), post.ups)
+            meme_data['upvote_ratio'] = post.upvote_ratio
+            meme_data['last_updated'] = datetime.datetime.utcnow().isoformat()
+
+            utils.update_meme_data(cursor, meme_data, connection)
+
+        return matching_memes
+    except Exception as e:
+        log_error(e)
+    finally:
+        lock.release()
+
+
 if __name__ == '__main__':
     import sqlite3
     conn = sqlite3.connect('memes/memes.sqlite3')

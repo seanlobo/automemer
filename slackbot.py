@@ -177,20 +177,21 @@ class AutoMemer:
             sys.exit(0)
         elif command.startswith("echo "):
             response = ''.join(output.get('@mention').split()[1:])
-            self.client.api_call(
-                "chat.postMessage",
-                channel=output['channel'],
-                text=response,
-                link_names=1,
-                as_user=True
-            )
-            return
         else:  # a default response
             response = (
                 ">*{}*\nI don't know this command :dealwithitparrot:\n"
                 .format(command)
             )
-        self.messages.put((output['channel'], response))
+
+        # construct the response
+        msg = {
+            'channel': output['channel'],
+            'text': response,
+        }
+        if 'thread_ts' in output:
+            # the message we are responding too was threaded, so thread
+            msg['thread_ts'] = output['thread_ts']
+        self.messages.put(msg)
 
     def load_post_to_slack_interval(self):
         self.lock.acquire()
@@ -201,11 +202,6 @@ class AutoMemer:
             interval = settings['scrape_interval']
             return interval
         except Exception as e:
-            self.messages.put((MEME_SPAM_CHANNEL, (
-                "There was an error setting the scrape interval :sadparrot:\n"
-                "Setting the interval to a default 1 hour (60 minutes)\n"
-                ">`{}`".format(str(e))
-            )))
             utils.log_error(e)
             return 60
         finally:
@@ -254,40 +250,43 @@ class AutoMemer:
                                 ups=ups,
                                 url=meme['url'])
                         )
-                        self.messages.put((MEME_SPAM_CHANNEL, meme_text))
+                        self.messages.put({
+                            'channel': MEME_SPAM_CHANNEL,
+                            'text': meme_text,
+                        })
                         break
                 sub_ind = (sub_ind + 1) % len(list_of_subs)
 
             with open(self.scraped_path, mode='w', encoding='utf-8') as f:
                 f.write(json.dumps(scraped_memes, indent=2))
             if 0 < limit and user_prompt:
-                self.messages.put((MEME_SPAM_CHANNEL,
-                                    'Sorry, we ran out of memes :('))
+                self.messages.put({
+                    'channel': MEME_SPAM_CHANNEL,
+                    'text': 'Sorry, we ran out of memes :('
+                })
         except Exception as e:
-            self.messages.put((MEME_SPAM_CHANNEL, (
-                "There was an error :sadparrot:\n"
-                ">`{}`".format(str(e))
-            )))
+            self.messages.put({
+                'channel': MEME_SPAM_CHANNEL,
+                'text': (
+                    "There was an error :sadparrot:\n"
+                    ">`{}`".format(str(e))
+                ),
+            })
             utils.log_error(e)
         finally:
             self.lock.release()
 
     def pop_queue(self):
         if not self.messages.empty():
-            channel, response = self.messages.get()
+            msg = self.messages.get()
             if not self.debug:
-                self.client.api_call("chat.postMessage", channel=channel,
-                                      text=response, as_user=True)
+                self.client.api_call("chat.postMessage", **msg, as_user=True)
             else:
-                d = {
-                    'api': "chat.postMessage",
-                    'channel': channel,
-                    'text': response,
-                    'as_user': True,
-                    'time': datetime.datetime.now().isoformat(),
-                }
+                msg['api'] = 'chat.postMessage'
+                msg['as_user'] = True
+                msg['time'] = datetime.datetime.now().isoformat(),
                 with open(self.log_file, 'a') as f:
-                    f.write(json.dumps(d, indent=2) + ',\n')
+                    f.write(json.dumps(msg, indent=2) + ',\n')
 
     def parse_slack_output(self, slack_rtm_output):
         """
@@ -508,7 +507,7 @@ class AutoMemer:
             response += "command must be in the form `details <meme_url>`\n"
         else:
             meme_url = html.unescape(command[1][1:-1])
-            meme_data = scrape_reddit.update_meme(
+            meme_data = scrape_reddit.update_reddit_meme(
                 self.cursor, self.conn, meme_url, self.lock
             )
             if meme_data is None:
