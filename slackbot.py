@@ -33,9 +33,9 @@ class AutoMemer:
         "list settings": "Prints out all settings",
         "list subreddits": "Prints a list of subreddits currently being scraped",
         "list thresholds": "Prints the thresholds for subs",
-        "num-memes {dank_only} {by_sub}": (
+        "num-memes {postable_only} {by_sub}": (
             "Prints the number of memes currently waiting to be posted. "
-            "To only post dank memes use `num-memes dank_only`, to get a "
+            "To only post memes with enough upvotes use `num-memes postable_only`, to get a "
             "breakdown by subreddit use `num-memes by_sub`"
         ),
         "pop {num}": "pops {num} memes (or as many as there are) from the queue",
@@ -58,8 +58,14 @@ class AutoMemer:
         self.debug      = debug
         self.users_list = self.client.api_call("users.list")
 
-        self.conn   = sqlite3.connect('memes/memes.sqlite3')
-        self.cursor = self.conn.cursor()
+        def dict_factory(cursor, row):
+            d = {}
+            for idx, col in enumerate(cursor.description):
+                d[col[0]] = row[idx]
+            return d
+        self.conn             = sqlite3.connect('memes/memes.sqlite3')
+        self.conn.row_factory = dict_factory
+        self.cursor           = self.conn.cursor()
 
         self.log_file      = './memes/log_file.txt'
         self.scraped_path  = './memes/scraped.json'
@@ -97,10 +103,6 @@ class AutoMemer:
                         slack_outputs = self.parse_slack_output(self.client.rtm_read())
                         for output in slack_outputs:
                             self.handle_command(output)
-                            # Process(
-                            #     target=self.handle_command,
-                            #     args=(output,)
-                            # ).start()
                         time_as_minutes = self.current_time_as_min()
                         if time_as_minutes % 10 == 0 and not scraped_reddit:
                             Process(
@@ -209,6 +211,7 @@ class AutoMemer:
 
     def add_new_memes_to_queue(self, limit=None, user_prompt=False):
         _, postable = self.count_memes()
+        # post 20% of the current number of memes in the queue, or 10
         limit = limit or max(10, int(0.2 * sum(postable.values())))
         self.lock.acquire()
         try:
@@ -226,14 +229,14 @@ class AutoMemer:
             list_of_subs = list(memes_by_sub.keys())
             sub_ind = 0
             while limit > 0 and any(memes_by_sub.values()):
-                # while we want and have more memes to pop
+                # while we haven't reached the limit and have more memes to post
                 sub = list_of_subs[sub_ind]
                 sub_threshold = thresholds.get(sub.lower(), thresholds['global'])
                 while memes_by_sub[sub]:  # while there are memes from this sub
                     meme = memes_by_sub[sub].pop(0)
                     del scraped_memes[meme['url']]
                     ups = int(meme.get('highest_ups'))
-                    if ups > sub_threshold:  # this meme is DAAANK
+                    if ups > sub_threshold:
                         utils.set_posted_to_slack(
                             self.cursor,
                             meme['id'],
@@ -259,7 +262,7 @@ class AutoMemer:
 
             with open(self.scraped_path, mode='w', encoding='utf-8') as f:
                 f.write(json.dumps(scraped_memes, indent=2))
-            if 0 < limit and user_prompt:
+            if limit > 0 and user_prompt:
                 self.messages.put({
                     'channel': MEME_SPAM_CHANNEL,
                     'text': 'Sorry, we ran out of memes :('
@@ -428,7 +431,7 @@ class AutoMemer:
             settings = json.loads(open(self.settings_path).read())
             subs = sorted(settings.get('subs'))
             response += (
-                'The following subreddits are currently being collected: {}'.format(
+                'The following subreddits are currently being followed: {}'.format(
                     str(subs))
             )
         except OSError as e:
@@ -544,7 +547,7 @@ class AutoMemer:
                         "Too many minutes!"
                     )
                 elif interval <= 0:
-                    response += "I see someone's trying to be a smart aleck. Enter a number greater than 0"
+                    response += "Please enter a number greater than 0"
                 else:
                     self.lock.acquire()
                     try:
@@ -571,7 +574,7 @@ class AutoMemer:
                 response += "{} isn't a number!".format(str(command[1]))
             else:
                 if limit <= 0:
-                    response += "You can't pop 0 or fewer memes........"
+                    response += "You can't pop 0 or fewer memes.."
                 else:
                     self.add_new_memes_to_queue(limit, user_prompt=True)
         else:
@@ -583,19 +586,19 @@ class AutoMemer:
         response = ""
         command = output.get('@mention').lower().split()
         by_sub = 'by_sub' in command
-        dank_only = 'dank_only' in command
+        postable_only = 'postable_only' in command
         total, postable = self.count_memes()
         subs_lower_to_title = {sub.lower(): sub for sub in total}
 
         if not by_sub:
-            if not dank_only:
+            if not postable_only:
                 text = "Total memes: {}\nPostable memes: {}".format(str(sum(total.values())),
                                                                     str(sum(postable.values())))
                 response += text
             else:
                 response += "Postable memes: {}".format(str(sum(postable.values())))
         else:
-            if not dank_only:
+            if not postable_only:
                 for sub in sorted(list(map(lambda x: x.lower(), total.keys()))):
                     response += "*{sub}*: {good}   ({tot})\n".format(
                         sub=subs_lower_to_title[sub],
@@ -640,17 +643,11 @@ if __name__ == "__main__":
     try:
         meme_bot.run()
     except Exception as e:
-        meme_bot.client.api_call(
-            "chat.postMessage",
-            channel=MEME_SPAM_CHANNEL,
-            text="R I P got a {}".format(str(e)),
-            as_user=True,
-        )
         utils.log_error(e)
 
     meme_bot.client.api_call(
         "chat.postMessage",
         channel=MEME_SPAM_CHANNEL,
-        text="exiting gracefully, systemd should restart the process...",
+        text="exiting gracefully",
         as_user=True,
     )

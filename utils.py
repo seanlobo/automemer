@@ -1,12 +1,21 @@
 import logging
+import os
 import traceback
 from logging import handlers
+from pathlib import Path
 
+
+SCRAPED_PATH  = 'memes/scraped.json'
+SETTINGS_PATH = 'memes/settings.json'
+SQLITE_FILE   = 'memes/memes.sqlite3'
+LOG_FILE      = 'memes/automemer.log'
 
 # set up logging
+os.makedirs('memes', exist_ok=True)
+Path(LOG_FILE).touch()
 logger = logging.getLogger(__name__)
 rfh = handlers.RotatingFileHandler(
-    'memes/automemer.log',
+    LOG_FILE,
     maxBytes=1024 * 1024 * 20,
     backupCount=1
 )
@@ -32,22 +41,12 @@ def get_meme_data(cursor, meme_id):
     cursor.execute(
         '''
         SELECT *
-        FROM memes
+        FROM posts
         WHERE id = ?
         ''',
         (meme_id,)
     )
-    row = cursor.fetchone()
-    if row:
-        keys = [
-            'id', 'over_18', 'ups', 'highest_ups', 'title', 'url', 'link',
-            'author', 'sub', 'upvote_ratio', 'created_utc', 'last_updated',
-            'recorded', 'posted_to_slack',
-        ]
-
-        return {keys[i]: row[i] for i in range(len(keys))}
-    else:
-        return dict()
+    return cursor.fetchone()
 
 
 def get_meme_data_from_url(cursor, url):
@@ -61,22 +60,12 @@ def get_meme_data_from_url(cursor, url):
     cursor.execute(
         '''
         SELECT *
-        FROM memes
+        FROM posts
         WHERE url = ?
         ''',
         (url,)
     )
-    rows = cursor.fetchall()
-    if rows:
-        keys = [
-            'id', 'over_18', 'ups', 'highest_ups', 'title', 'url', 'link',
-            'author', 'sub', 'upvote_ratio', 'created_utc', 'last_updated',
-            'recorded', 'posted_to_slack',
-        ]
-
-        return [{keys[i]: row[i] for i in range(len(keys))} for row in rows]
-    else:
-        return []
+    return cursor.fetchall()
 
 
 def add_meme_data(cursor, meme_dict, connection, replace=False):
@@ -92,7 +81,7 @@ def add_meme_data(cursor, meme_dict, connection, replace=False):
     replace_str = 'REPLACE' if replace else 'IGNORE'
     cursor.execute(
         '''
-        INSERT OR {replace_str} INTO memes VALUES (
+        INSERT OR {replace_str} INTO posts VALUES (
             :id,
             :over_18,
             :ups,
@@ -124,7 +113,7 @@ def update_meme_data(cursor, meme_dict, connection):
     """
     cursor.execute(
         '''
-        UPDATE memes
+        UPDATE posts
         SET ups = ?, highest_ups = ?, last_updated = ?, posted_to_slack = ?,
             upvote_ratio = ?
         WHERE id = ?
@@ -152,7 +141,7 @@ def set_posted_to_slack(cursor, meme_id, connection, val):
     """
     cursor.execute(
         '''
-        UPDATE memes
+        UPDATE posts
         SET posted_to_slack = ?
         WHERE id = ?
         ''',
@@ -173,7 +162,7 @@ def has_been_posted_to_slack(cursor, meme_dict):
     cursor.execute(
         '''
         SELECT posted_to_slack
-        FROM memes
+        FROM posts
         WHERE url = ?
         ''',
         (meme_dict['url'],)

@@ -12,7 +12,10 @@ import utils
 
 
 # loading praw agent
-reddit = praw.Reddit('automemer', user_agent='meme scraper')
+reddit = praw.Reddit(
+    'automemer',
+    user_agent='Python/praw:automemer:v1.0 (by /u/AutoMemer)'
+)
 
 
 def scrape(cursor, connection, lock=Lock()):
