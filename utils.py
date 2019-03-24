@@ -5,10 +5,10 @@ from logging import handlers
 from pathlib import Path
 
 
-SCRAPED_PATH  = 'memes/scraped.json'
+SCRAPED_PATH = 'memes/scraped.json'
 SETTINGS_PATH = 'memes/settings.json'
-SQLITE_FILE   = 'memes/memes.sqlite3'
-LOG_FILE      = 'memes/automemer.log'
+SQLITE_FILE = 'memes/memes.sqlite3'
+LOG_FILE = 'memes/automemer.log'
 
 # set up logging
 os.makedirs('memes', exist_ok=True)
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 rfh = handlers.RotatingFileHandler(
     LOG_FILE,
     maxBytes=1024 * 1024 * 20,
-    backupCount=1
+    backupCount=1,
 )
 rfh.setLevel(logging.DEBUG)
 rfh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
@@ -28,7 +28,7 @@ def log_error(error):
     """Writes the given error to a log file"""
     error_type_string = type(error).__name__
     traceback_string = traceback.format_exc()
-    logger.error("%s\n%s", error_type_string, traceback_string)
+    logger.error('%s\n%s', error_type_string, traceback_string)
 
 
 def get_meme_data(cursor, meme_id):
@@ -44,7 +44,7 @@ def get_meme_data(cursor, meme_id):
         FROM posts
         WHERE id = ?
         ''',
-        (meme_id,)
+        (meme_id,),
     )
     return cursor.fetchone()
 
@@ -63,7 +63,7 @@ def get_meme_data_from_url(cursor, url):
         FROM posts
         WHERE url = ?
         ''',
-        (url,)
+        (url,),
     )
     return cursor.fetchall()
 
@@ -98,7 +98,7 @@ def add_meme_data(cursor, meme_dict, connection, replace=False):
             :posted_to_slack
         );
         '''.format(replace_str=replace_str),
-        meme_dict
+        meme_dict,
     )
     connection.commit()
 
@@ -125,7 +125,7 @@ def update_meme_data(cursor, meme_dict, connection):
             meme_dict['posted_to_slack'],
             meme_dict['upvote_ratio'],
             meme_dict['id'],
-        )
+        ),
     )
     connection.commit()
 
@@ -145,7 +145,7 @@ def set_posted_to_slack(cursor, meme_id, connection, val):
         SET posted_to_slack = ?
         WHERE id = ?
         ''',
-        (val, meme_id)
+        (val, meme_id),
     )
     connection.commit()
 
@@ -165,7 +165,7 @@ def has_been_posted_to_slack(cursor, meme_dict):
         FROM posts
         WHERE url = ?
         ''',
-        (meme_dict['url'],)
+        (meme_dict['url'],),
     )
     values = cursor.fetchall()
     for v in values:

@@ -1,9 +1,6 @@
-import datetime
 import json
-import logging
 import sqlite3
-import time
-import traceback
+from datetime import datetime
 from multiprocessing import Lock
 
 import praw
@@ -14,7 +11,7 @@ import utils
 # loading praw agent
 reddit = praw.Reddit(
     'automemer',
-    user_agent='Python/praw:automemer:v1.0 (by /u/AutoMemer)'
+    user_agent='Python/praw:automemer:v1.0 (by /u/AutoMemer)',
 )
 
 
@@ -55,9 +52,9 @@ def scrape(cursor, connection, lock=Lock()):
                 'author': str(post.author),
                 'sub': post.subreddit.display_name,
                 'upvote_ratio': post.upvote_ratio,
-                'recorded': datetime.datetime.utcnow().isoformat(),
-                'created_utc': datetime.datetime.fromtimestamp(post.created_utc).isoformat(),
-                'last_updated': datetime.datetime.utcnow().isoformat(),
+                'recorded': datetime.utcnow().isoformat(),
+                'created_utc': datetime.fromtimestamp(post.created_utc).isoformat(),
+                'last_updated': datetime.utcnow().isoformat(),
             }
             sub_memes.append(data)
         reddit_memes.append(sub_memes)
@@ -71,7 +68,7 @@ def scrape(cursor, connection, lock=Lock()):
                 new_memes = json.loads(scraped.read())  # the memes we've scraped but not yet posted
         except OSError as e:
             utils.log_error(e)
-            new_memes = dict()
+            new_memes = {}
 
         # add scraped memes to our database and scraped.json file
         for i, sub in enumerate(subreddits):
@@ -88,7 +85,7 @@ def scrape(cursor, connection, lock=Lock()):
                         previous_data['highest_ups'] = max(
                             post.get('ups') or 1,
                             previous_data.get('highest_ups') or 1,
-                            previous_data.get('ups') or 1
+                            previous_data.get('ups') or 1,
                         )
                         previous_data['ups'] = post['ups']
                         previous_data['upvote_ratio'] = post['upvote_ratio']
@@ -96,8 +93,8 @@ def scrape(cursor, connection, lock=Lock()):
                         utils.update_meme_data(cursor, previous_data, connection)
 
                         # if this url hasn't ever been posted, add it to the list
-                        if not (previous_data['over_18']
-                                or utils.has_been_posted_to_slack(cursor, previous_data)):
+                        if not (previous_data['over_18'] or
+                                utils.has_been_posted_to_slack(cursor, previous_data)):
                             new_memes[post['url']] = post
             except Exception as e:
                 utils.log_error(e)
@@ -108,7 +105,6 @@ def scrape(cursor, connection, lock=Lock()):
 
     finally:
         lock.release()
-
 
 
 def update_reddit_meme(cursor, connection, meme_url, lock):
@@ -125,23 +121,22 @@ def update_reddit_meme(cursor, connection, meme_url, lock):
     try:
         matching_memes = utils.get_meme_data_from_url(cursor, meme_url)
         for meme_data in matching_memes:
-            post                      = reddit.submission(id=meme_data['id'])
-            meme_data['ups']          = post.ups
-            meme_data['highest_ups']  = max(meme_data.get('highest_ups', 0), post.ups)
+            post = reddit.submission(id=meme_data['id'])
+            meme_data['ups'] = post.ups
+            meme_data['highest_ups'] = max(meme_data.get('highest_ups', 0), post.ups)
             meme_data['upvote_ratio'] = post.upvote_ratio
-            meme_data['last_updated'] = datetime.datetime.utcnow().isoformat()
+            meme_data['last_updated'] = datetime.utcnow().isoformat()
 
             utils.update_meme_data(cursor, meme_data, connection)
 
         return matching_memes
     except Exception as e:
-        log_error(e)
+        utils.log_error(e)
     finally:
         lock.release()
 
 
 if __name__ == '__main__':
-    import sqlite3
     conn = sqlite3.connect('memes/memes.sqlite3')
     cursor = conn.cursor()
     scrape(cursor, conn)
