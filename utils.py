@@ -139,9 +139,9 @@ def update_meme_data(cursor, meme_dict, connection):
     cursor.execute(
         '''
         UPDATE posts
-        SET ups = ?, highest_ups = ?, last_updated = ?, posted_to_slack = ?,
-            upvote_ratio = ?
-        WHERE id = ?
+        SET ups = %s, highest_ups = %s, last_updated = %s, posted_to_slack = %s,
+            upvote_ratio = %s
+        WHERE id = %s
         ''',
         (
             meme_dict['ups'],
@@ -152,7 +152,6 @@ def update_meme_data(cursor, meme_dict, connection):
             meme_dict['id'],
         ),
     )
-    connection.commit()
 
 
 def set_posted_to_slack(cursor, meme_id, connection, val):
@@ -167,8 +166,8 @@ def set_posted_to_slack(cursor, meme_id, connection, val):
     cursor.execute(
         '''
         UPDATE posts
-        SET posted_to_slack = ?
-        WHERE id = ?
+        SET posted_to_slack = %s
+        WHERE id = %s
         ''',
         (val, meme_id),
     )
@@ -188,7 +187,7 @@ def has_been_posted_to_slack(cursor, meme_dict):
         '''
         SELECT posted_to_slack
         FROM posts
-        WHERE url = ?
+        WHERE url = %s
         ''',
         (meme_dict['url'],),
     )

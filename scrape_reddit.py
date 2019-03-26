@@ -14,9 +14,11 @@ reddit = praw.Reddit(
 )
 
 
-def scrape(cursor, connection, lock=Lock()):
+def scrape(cursor, connection, lock=Lock(), print_output=False):
     """Queries Praw to scrape subs according to preferences file"""
     # loading in subreddit list
+    if print_output:
+        print('Loading settings')
     lock.acquire()
     try:
         with open('memes/settings.json', mode='r', encoding='utf-8') as f:
@@ -36,9 +38,13 @@ def scrape(cursor, connection, lock=Lock()):
 
     # querying praw without lock acquired, because this takes a long time
     reddit_memes = []
-    for sub in subreddits:
+    for sub_i, sub in enumerate(subreddits):
         sub_memes = []
-        for post in sub.hot(limit=NUM_MEMES):
+        for post_i, post in enumerate(sub.hot(limit=NUM_MEMES)):
+            if print_output:
+                post_str = f'{post_i + 1:}/{NUM_MEMES}'
+                sub_str = f'{sub_i + 1:}/{len(subreddits)}'
+                print(f'\rfetching data for post {post_str: <5} in sub {sub_str: <5}', end=' ')
             data = {
                 'over_18': post.over_18,
                 'id': post.id,
@@ -58,6 +64,9 @@ def scrape(cursor, connection, lock=Lock()):
             sub_memes.append(data)
         reddit_memes.append(sub_memes)
 
+    if print_output:
+        print()
+        print('updating database')
     # update scraped list and database with lock acquired
     lock.acquire()
     try:
@@ -146,4 +155,4 @@ if __name__ == '__main__':
         db_info['host'],
     )
     cursor = conn.cursor()
-    scrape(cursor, conn)
+    scrape(cursor, conn, print_output=True)
