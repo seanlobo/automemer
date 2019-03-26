@@ -1,5 +1,4 @@
 import json
-import sqlite3
 from datetime import datetime
 from multiprocessing import Lock
 
@@ -137,6 +136,14 @@ def update_reddit_meme(cursor, connection, meme_url, lock):
 
 
 if __name__ == '__main__':
-    conn = sqlite3.connect('memes/memes.sqlite3')
+    with open('db.json', 'r') as f:
+        db_info = json.loads(f.read())
+
+    conn = utils.get_connection(
+        db_info['user'],
+        db_info['password'],
+        db_info['db'],
+        db_info['host'],
+    )
     cursor = conn.cursor()
     scrape(cursor, conn)

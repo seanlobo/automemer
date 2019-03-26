@@ -3,7 +3,6 @@ import html
 import json
 import os
 import queue
-import sqlite3
 import sys
 import time
 from collections import Counter
@@ -50,7 +49,10 @@ class AutoMemer:
         ),
     }
 
-    def __init__(self, bot_id, channel_id, bot_token, debug=False):
+    def __init__(
+        self, bot_id, channel_id, bot_token, dbuser, dbpassword,
+        dbname, dbhost, debug=False,
+    ):
         self.bot_id = bot_id
         self.at_bot = '<@' + bot_id + '>'
         self.channel_id = channel_id
@@ -60,27 +62,17 @@ class AutoMemer:
         self.debug = debug
         self.users_list = self.client.api_call('users.list')
 
-        def dict_factory(cursor, row):
-            d = {}
-            for idx, col in enumerate(cursor.description):
-                d[col[0]] = row[idx]
-            return d
-        self.conn = sqlite3.connect('memes/memes.sqlite3')
-        self.conn.row_factory = dict_factory
+        self.conn = utils.get_connection(dbuser, dbpassword, dbname, dbhost)
         self.cursor = self.conn.cursor()
-
-        self.log_file = './memes/log_file.txt'
-        self.scraped_path = './memes/scraped.json'
-        self.settings_path = './memes/settings.json'
 
         # creating directories and files
         os.makedirs('memes', exist_ok=True)
-        if not os.path.isfile(self.scraped_path):
-            file = open(self.scraped_path, 'x')
+        if not os.path.isfile(utils.SCRAPED_PATH):
+            file = open(utils.SCRAPED_PATH, 'x')
             file.write(json.dumps({}))
             file.close()
-        if not os.path.isfile(self.settings_path):
-            file = open(self.settings_path, 'x')
+        if not os.path.isfile(utils.SETTINGS_PATH):
+            file = open(utils.SETTINGS_PATH, 'x')
             file.write(json.dumps({}))
             file.close()
 
@@ -145,7 +137,7 @@ class AutoMemer:
         command = output.get('@mention')
         if command is None:
             return
-        response = '>{}\n'.format(command)
+        response = f'>{command}\n'
         command = command.lower()
         # specific command responses
         if command.startswith('add'):
@@ -206,7 +198,7 @@ class AutoMemer:
     def load_post_to_slack_interval(self):
         self.lock.acquire()
         try:
-            with open(self.settings_path, mode='r', encoding='utf-8') as f:
+            with open(utils.SETTINGS_PATH, mode='r', encoding='utf-8') as f:
                 settings = f.read()
             settings = json.loads(settings)
             interval = settings['scrape_interval']
@@ -223,10 +215,10 @@ class AutoMemer:
         limit = limit or max(10, int(0.2 * sum(postable.values())))
         self.lock.acquire()
         try:
-            with open(self.scraped_path, mode='r', encoding='utf-8') as f:
+            with open(utils.SCRAPED_PATH, mode='r', encoding='utf-8') as f:
                 scraped = f.read()
             scraped_memes = json.loads(scraped)
-            with open(self.settings_path, mode='r', encoding='utf-8') as f:
+            with open(utils.SETTINGS_PATH, mode='r', encoding='utf-8') as f:
                 settings = json.loads(f.read())
             thresholds = settings['threshold_upvotes']
             memes_by_sub = defaultdict(list)
@@ -271,7 +263,7 @@ class AutoMemer:
                         break
                 sub_ind = (sub_ind + 1) % len(list_of_subs)
 
-            with open(self.scraped_path, mode='w', encoding='utf-8') as f:
+            with open(utils.SCRAPED_PATH, mode='w', encoding='utf-8') as f:
                 f.write(json.dumps(scraped_memes, indent=2))
             if limit > 0 and user_prompt:
                 self.messages.put({
@@ -299,7 +291,7 @@ class AutoMemer:
                 msg['api'] = 'chat.postMessage'
                 msg['as_user'] = True
                 msg['time'] = datetime.datetime.now().isoformat(),
-                with open(self.log_file, 'a') as f:
+                with open(utils.LOG_FILE, 'a') as f:
                     f.write(json.dumps(msg, indent=2) + ',\n')
 
     def parse_slack_output(self, slack_rtm_output):
@@ -324,15 +316,15 @@ class AutoMemer:
         if not isinstance(message, str):
             message = json.dumps(message, indent=2)
 
-        with open(self.log_file, 'a') as f:
+        with open(utils.LOG_FILE, 'a') as f:
             f.write(message + ',\n')
 
     def count_memes(self):
         self.lock.acquire()
         try:
-            with open(self.scraped_path, mode='r', encoding='utf-8') as f:
+            with open(utils.SCRAPED_PATH, mode='r', encoding='utf-8') as f:
                 memes = f.read()
-            with open(self.settings_path, mode='r', encoding='utf-8') as f:
+            with open(utils.SETTINGS_PATH, mode='r', encoding='utf-8') as f:
                 settings = f.read()
             memes = json.loads(memes)
             settings = json.loads(settings)
@@ -357,7 +349,7 @@ class AutoMemer:
     def _command_help(self):
         text = ''
         for command, description in sorted(AutoMemer.bot_commands.items(), key=lambda x: x[0]):
-            text += '`{}` - {}\n'.format(command, description)
+            text += f'`{command}` - {description}\n'
         return text
 
     def _command_add_sub(self, output):
@@ -367,15 +359,15 @@ class AutoMemer:
             response += 'command must be in the form `add [name]`'
         else:
             command = command[1]
-            settings = json.loads(open(self.settings_path).read())
+            settings = json.loads(open(utils.SETTINGS_PATH).read())
             settings['subs'].append(command)
             self.lock.acquire()
             try:
-                with open(self.settings_path, mode='w', encoding='utf-8') as f:
+                with open(utils.SETTINGS_PATH, mode='w', encoding='utf-8') as f:
                     f.write(json.dumps(settings, indent=2))
             finally:
                 self.lock.release()
-            response += '_/r/{}_ has been added!'.format(command)
+            response += f'_/r/{command}_ has been added!'
         return response
 
     def _command_delete_sub(self, output):
@@ -385,7 +377,7 @@ class AutoMemer:
             response += 'command must be in the form `delete [name]`'
         else:
             sub = command[1]
-            settings = json.loads(open(self.settings_path).read())
+            settings = json.loads(open(utils.SETTINGS_PATH).read())
             previous_subs = settings['subs']
             previous_thresholds = settings['threshold_upvotes']
             if sub not in previous_subs:
@@ -400,18 +392,18 @@ class AutoMemer:
                     del previous_thresholds[sub]
                 self.lock.acquire()
                 try:
-                    with open(self.settings_path, mode='w', encoding='utf-8') as f:
+                    with open(utils.SETTINGS_PATH, mode='w', encoding='utf-8') as f:
                         f.write(json.dumps(settings, indent=2))
                 finally:
                     self.lock.release()
-                response += '_/r/{}_ has been removed'.format(sub)
+                response += f'_/r/{sub}_ has been removed'
         return response
 
     def _command_list_settings(self):
         response = ''
         self.lock.acquire()
         try:
-            with open(self.settings_path, mode='r', encoding='utf-8') as f:
+            with open(utils.SETTINGS_PATH, mode='r', encoding='utf-8') as f:
                 settings = json.loads(f.read())
         finally:
             self.lock.release()
@@ -425,7 +417,7 @@ class AutoMemer:
         response = ''
         self.lock.acquire()
         try:
-            settings = json.loads(open(self.settings_path).read())
+            settings = json.loads(open(utils.SETTINGS_PATH).read())
             thresholds = settings.get('threshold_upvotes')
             response += json.dumps(thresholds, indent=2)
         except OSError as e:
@@ -439,7 +431,7 @@ class AutoMemer:
         response = ''
         self.lock.acquire()
         try:
-            settings = json.loads(open(self.settings_path).read())
+            settings = json.loads(open(utils.SETTINGS_PATH).read())
             subs = sorted(settings.get('subs'))
             response += (
                 'The following subreddits are currently being followed: {}'.format(
@@ -469,7 +461,7 @@ class AutoMemer:
             try:
                 threshold = int(threshold)
             except ValueError:
-                response += '{threshold} is not a valid integer'.format(threshold=threshold)
+                response += f'{threshold} is not a valid integer'
             else:
                 old_t, new_t = self._command_set_threshold_to(threshold, mode=mode)
                 response += (
@@ -478,16 +470,16 @@ class AutoMemer:
                 )
         else:
             sub = command[-1].lower()
-            with open(self.settings_path, mode='r', encoding='utf-8') as f:
+            with open(utils.SETTINGS_PATH, mode='r', encoding='utf-8') as f:
                 settings = json.loads(f.read())
             if sub not in settings['subs']:
-                response += '{} is not in the list of subreddits. run `list subreddits` to view a list'.format(sub)
+                response += f'{sub} is not in the list of subreddits. run `list subreddits` to view a list'
             else:
                 threshold = command[2]
                 try:
                     threshold = int(threshold)
                 except ValueError:
-                    response += '{threshold} is not a valid integer'.format(threshold=threshold)
+                    response += f'{threshold} is not a valid integer'
                 else:
                     old_t, new_t = self._command_set_threshold_to(threshold, sub=sub, mode=mode)
                     response += (
@@ -499,7 +491,7 @@ class AutoMemer:
     def _command_set_threshold_to(self, upvote_value, sub='global', mode=None):
         self.lock.acquire()
         try:
-            settings = json.loads(open(self.settings_path).read())
+            settings = json.loads(open(utils.SETTINGS_PATH).read())
             old_t = settings['threshold_upvotes'].get(sub, 'global')
             new_t = upvote_value
             if mode == '+':
@@ -509,7 +501,7 @@ class AutoMemer:
                     new_t += old_t
             new_t = max(1, new_t)
             settings['threshold_upvotes'][sub] = new_t
-            with open(self.settings_path, 'w') as f:
+            with open(utils.SETTINGS_PATH, 'w') as f:
                 f.write(json.dumps(settings, indent=2))
             return old_t, new_t
         finally:
@@ -526,7 +518,7 @@ class AutoMemer:
                 self.cursor, self.conn, meme_url, self.lock,
             )
             if meme_data is None:
-                response += 'I could find any data for this url: `{}`, sorry\n'.format(meme_url)
+                response += f'I could find any data for this url: `{meme_url}`, sorry\n'
             else:
                 if link_only:
                     for meme in meme_data:
@@ -534,7 +526,7 @@ class AutoMemer:
                 else:
                     for meme in meme_data:
                         for key, val in sorted(meme.items()):
-                            response += '`{key}`: {data}\n'.format(key=key, data=val)
+                            response += f'`{key}`: {val}\n'
                         response += '\n'
         return response
 
@@ -548,7 +540,7 @@ class AutoMemer:
             try:
                 interval = int(interval)
             except ValueError:
-                response += '{} is not an integer :parrotcop:'.format(interval)
+                response += f'{interval} is not an integer :parrotcop:'
             else:
                 if interval >= 1440:
                     response += (
@@ -563,13 +555,13 @@ class AutoMemer:
                 else:
                     self.lock.acquire()
                     try:
-                        with open(self.settings_path, mode='r', encoding='utf-8') as s:
+                        with open(utils.SETTINGS_PATH, mode='r', encoding='utf-8') as s:
                             settings = s.read()
                         settings = json.loads(settings)
                         settings['scrape_interval'] = interval
                         global scrape_interval
                         scrape_interval = interval
-                        with open(self.settings_path, mode='w', encoding='utf-8') as s:
+                        with open(utils.SETTINGS_PATH, mode='w', encoding='utf-8') as s:
                             s.write(json.dumps(settings, indent=2))
                         response += 'scrape_interval has been set to *{}*!'.format(str(interval))
                     finally:
@@ -656,15 +648,26 @@ if __name__ == '__main__':
     MEME_SPAM_CHANNEL = os.environ.get('MEME_SPAM_CHANNEL')
     BOT_TOKEN = os.environ.get('SLACK_BOT_TOKEN')
 
-    meme_bot = AutoMemer(BOT_ID, MEME_SPAM_CHANNEL, BOT_TOKEN)
+    with open('db.json', 'r') as f:
+        db_info = json.loads(f.read())
+
+    meme_bot = AutoMemer(
+        BOT_ID,
+        MEME_SPAM_CHANNEL,
+        BOT_TOKEN,
+        db_info['user'],
+        db_info['password'],
+        db_info['db'],
+        db_info['host'],
+    )
     try:
         meme_bot.run()
     except Exception as e:
         utils.log_error(e)
-
-    meme_bot.client.api_call(
-        'chat.postMessage',
-        channel=MEME_SPAM_CHANNEL,
-        text='exiting gracefully',
-        as_user=True,
-    )
+    else:
+        meme_bot.client.api_call(
+            'chat.postMessage',
+            channel=MEME_SPAM_CHANNEL,
+            text='exiting gracefully',
+            as_user=True,
+        )

@@ -4,6 +4,7 @@ vendor
 Makefile
 memes
 *.json
+!db.json
 *.txt
 *test*
 !requirements.txt

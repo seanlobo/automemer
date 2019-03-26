@@ -1,6 +1,5 @@
 import json
 import os
-import sqlite3
 
 import utils
 
@@ -18,26 +17,33 @@ if __name__ == '__main__':
 
     # create sqlite db
     if not os.path.isfile(utils.SQLITE_FILE):
-        conn = sqlite3.connect(utils.SQLITE_FILE)
+        with open('db.json', 'r') as f:
+            db_info = json.loads(f.read())
+        conn = utils.get_connection(
+            db_info['user'],
+            db_info['password'],
+            db_info['db'],
+            db_info['host'],
+        )
         cursor = conn.cursor()
 
         cursor.execute('''
-            CREATE TABLE posts (
-                id              STRING,
+            CREATE TABLE IF NOT EXISTS posts (
+                id              TEXT,
                 over_18         BOOLEAN,
                 ups             INTEGER,
                 highest_ups     INTEGER,
-                title           STRING,
-                url             STRING,
-                link            STRING,
-                author          STRING,
-                sub             STRING,
+                title           TEXT,
+                url             TEXT,
+                link            TEXT,
+                author          TEXT,
+                sub             TEXT,
                 upvote_ratio    FLOAT,
                 created_utc     DATETIME,
                 last_updated    DATETIME,
-                recorded        STRING,
+                recorded        TEXT,
                 posted_to_slack BOOLEAN
-            )
+            );
         ''')
 
         conn.commit()

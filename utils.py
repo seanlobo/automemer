@@ -4,6 +4,8 @@ import traceback
 from logging import handlers
 from pathlib import Path
 
+import pymysql
+
 
 SCRAPED_PATH = 'memes/scraped.json'
 SETTINGS_PATH = 'memes/settings.json'
@@ -31,6 +33,29 @@ def log_error(error):
     logger.error('%s\n%s', error_type_string, traceback_string)
 
 
+def get_connection(
+    user,
+    password,
+    db,
+    host,
+    cursorclass=pymysql.cursors.DictCursor,
+    autocommit=True,
+    charset='utf8mb4',
+    **kwargs,
+):
+
+    return pymysql.connect(
+        user=user,
+        password=password,
+        db=db,
+        host=host,
+        cursorclass=cursorclass,
+        charset=charset,
+        autocommit=autocommit,
+        **kwargs,
+    )
+
+
 def get_meme_data(cursor, meme_id):
     """
     Queries SQLite for data associated with the passed Reddit post id.
@@ -42,7 +67,7 @@ def get_meme_data(cursor, meme_id):
         '''
         SELECT *
         FROM posts
-        WHERE id = ?
+        WHERE id = %s
         ''',
         (meme_id,),
     )
@@ -61,7 +86,7 @@ def get_meme_data_from_url(cursor, url):
         '''
         SELECT *
         FROM posts
-        WHERE url = ?
+        WHERE url = %s
         ''',
         (url,),
     )
@@ -169,6 +194,6 @@ def has_been_posted_to_slack(cursor, meme_dict):
     )
     values = cursor.fetchall()
     for v in values:
-        if v[0]:
+        if v['posted_to_slack']:
             return True
     return False
