@@ -1,5 +1,7 @@
+import datetime
 import logging
 import os
+import threading
 import traceback
 from logging import handlers
 from pathlib import Path
@@ -10,14 +12,17 @@ import pymysql
 SCRAPED_PATH = 'memes/scraped.json'
 SETTINGS_PATH = 'memes/settings.json'
 SQLITE_FILE = 'memes/memes.sqlite3'
-LOG_FILE = 'memes/automemer.log'
+ERROR_LOG_FILE = 'memes/errors.log'
+SLACK_LOG_FILE = 'memes/comments.log'
+USAGE_LOG_FILE = 'memes/usage.log'
 
 # set up logging
 os.makedirs('memes', exist_ok=True)
-Path(LOG_FILE).touch()
+Path(ERROR_LOG_FILE).touch()
+Path(USAGE_LOG_FILE).touch()
 logger = logging.getLogger(__name__)
 rfh = handlers.RotatingFileHandler(
-    LOG_FILE,
+    ERROR_LOG_FILE,
     maxBytes=1024 * 1024 * 20,
     backupCount=1,
 )
@@ -31,6 +36,12 @@ def log_error(error):
     error_type_string = type(error).__name__
     traceback_string = traceback.format_exc()
     logger.error('%s\n%s', error_type_string, traceback_string)
+
+def log_usage(log_str):
+    time_str = str(datetime.datetime.now())
+
+    with open(USAGE_LOG_FILE, 'a') as f:
+        f.write(f'{time_str} - {threading.get_ident()} - {log_str}\n')
 
 
 def get_connection(
@@ -93,7 +104,7 @@ def get_meme_data_from_url(cursor, url):
     return cursor.fetchall()
 
 
-def add_meme_data(cursor, meme_dict, connection, replace=False):
+def add_meme_data(cursor, meme_dict, connection):
     """
     Inserts data for the passed dict into the database. Will always insert if
     the data doesn't exist, will update existing data if replace=True, and do nothing
@@ -103,26 +114,25 @@ def add_meme_data(cursor, meme_dict, connection, replace=False):
     :param connection: a database connection object
     :param replace: whether to replace existing data or do nothing when existing data is found
     """
-    replace_str = 'REPLACE' if replace else 'IGNORE'
     cursor.execute(
         '''
-        INSERT OR {replace_str} INTO posts VALUES (
-            :id,
-            :over_18,
-            :ups,
-            :highest_ups,
-            :title,
-            :url,
-            :link,
-            :author,
-            :sub,
-            :upvote_ratio,
-            :created_utc,
-            :last_updated,
-            :recorded,
-            :posted_to_slack
+        INSERT INTO posts VALUES (
+            %(id)s,
+            %(over_18)s,
+            %(ups)s,
+            %(highest_ups)s,
+            %(title)s,
+            %(url)s,
+            %(link)s,
+            %(author)s,
+            %(sub)s,
+            %(upvote_ratio)s,
+            %(created_utc)s,
+            %(last_updated)s,
+            %(recorded)s,
+            %(posted_to_slack)s
         );
-        '''.format(replace_str=replace_str),
+        ''',
         meme_dict,
     )
     connection.commit()

@@ -9,6 +9,7 @@ from collections import Counter
 from collections import defaultdict
 from multiprocessing import Lock
 from multiprocessing import Process
+from threading import Thread
 
 import websocket
 from slackclient import SlackClient
@@ -40,13 +41,13 @@ class AutoMemer:
             'breakdown by subreddit use `num-memes by_sub`'
         ),
         'pop {num}': 'pops {num} memes (or as many as there are) from the queue',
-        'set scrape interval <int>': 'sets the scrape interval to <int> minutes',
         'set threshold <threshold> {optional_subreddit}': (
             'Sets threshold upvotes a meme must meet to be scraped. If '
             '{optional_subreddit} is specified, sets <threshold> specifically '
             'for that sub, otherwise a global threshold is set (applied to '
             'subs without a specific threshold)'
         ),
+        'scrape reddit': 'manually starts a reddit scrape, which usually occurs every 30 minutes',
     }
 
     def __init__(
@@ -76,6 +77,8 @@ class AutoMemer:
             file.write(json.dumps({}))
             file.close()
 
+        utils.log_usage('Running init')
+
     @staticmethod
     def current_time_as_min():
         now = datetime.datetime.now()
@@ -84,32 +87,42 @@ class AutoMemer:
 
     def run(self):
         READ_WEBSOCKET_DELAY = 1  # 1 second delay between reading from firehose
+        utils.log_usage('run()')
         while True:
             try:
                 if self.client.rtm_connect():
                     print('AutoMemer connected and running!')
+                    utils.log_usage('run() - self.client.rtm_connect()')
+                    post_to_slack_interval = self.load_post_to_slack_interval()
                     while True:
                         scraped_reddit = False
                         # have we added the contents of scraped.json to our queue
                         added_memes_to_queue = False
-                        post_to_slack_interval = self.load_post_to_slack_interval()
 
                         slack_outputs = self.parse_slack_output(self.client.rtm_read())
                         for output in slack_outputs:
-                            self.handle_command(output)
+                            t = Thread(
+                                target=self.handle_command,
+                                args=(output,),
+                            )
+                            t.daemon = True
+                            t.start()
                         time_as_minutes = self.current_time_as_min()
-                        if time_as_minutes % 10 == 0 and not scraped_reddit:
-                            Process(
+                        if time_as_minutes % 30 == 0 and not scraped_reddit:
+                            t = Thread(
                                 target=scrape_reddit.scrape,
                                 args=(self.cursor, self.conn, self.lock),
-                            ).start()
+                            )
+                            t.daemon = True
+                            t.start()
                             scraped_reddit = True  # we just added the memes
-                        elif time_as_minutes % 10 > 0:
+                        elif time_as_minutes % 30 > 0:
                             # the minute passed, reset scraped_reddit
                             scraped_reddit = False
 
                         if (
                             time_as_minutes % post_to_slack_interval == 0 and
+                            (time_as_minutes == 0 or time_as_minutes > 9*60) and  # it's midnight or after 9am
                             not added_memes_to_queue
                         ):
                             self.add_new_memes_to_queue()
@@ -137,6 +150,8 @@ class AutoMemer:
         command = output.get('@mention')
         if command is None:
             return
+
+        utils.log_usage('handle_command')
         response = f'>{command}\n'
         command = command.lower()
         # specific command responses
@@ -179,6 +194,18 @@ class AutoMemer:
             sys.exit(0)
         elif command.startswith('echo '):
             response = ''.join(output.get('@mention').split()[1:])
+        elif 'less memes' in command:
+            response = '*fewer'
+        elif 'fewer time' in command:
+            response = '*less'
+        elif command == 'scrape reddit':
+            t = Thread(
+                target=scrape_reddit.scrape,
+                args=(self.cursor, self.conn, self.lock),
+            )
+            t.daemon = True
+            t.start()
+            response = '+:+1:'
         else:  # a default response
             response = (
                 ">*{}*\nI don't know this command :dealwithitparrot:\n"
@@ -193,6 +220,8 @@ class AutoMemer:
         if 'thread_ts' in output:
             # the message we are responding too was threaded, so thread
             msg['thread_ts'] = output['thread_ts']
+        else:
+            msg['thread_ts'] = output['ts']
         self.messages.put(msg)
 
     def load_post_to_slack_interval(self):
@@ -210,9 +239,11 @@ class AutoMemer:
             self.lock.release()
 
     def add_new_memes_to_queue(self, limit=None, user_prompt=False):
+        utils.log_usage(f'add_new_memes_to_queue(limit={limit}, user_prompt={user_prompt})')
         _, postable = self.count_memes()
-        # post 20% of the current number of memes in the queue, or 10
-        limit = limit or max(10, int(0.2 * sum(postable.values())))
+        # post 50% of the current number of memes in the queue
+        limit = limit or int(0.5 * sum(postable.values()))
+        utils.log_usage(f'add_new_memes_to_queue - postable_memes={sum(postable.values())}, limit={limit}')
         self.lock.acquire()
         try:
             with open(utils.SCRAPED_PATH, mode='r', encoding='utf-8') as f:
@@ -291,7 +322,7 @@ class AutoMemer:
                 msg['api'] = 'chat.postMessage'
                 msg['as_user'] = True
                 msg['time'] = datetime.datetime.now().isoformat(),
-                with open(utils.LOG_FILE, 'a') as f:
+                with open(utils.SLACK_LOG_FILE, 'a') as f:
                     f.write(json.dumps(msg, indent=2) + ',\n')
 
     def parse_slack_output(self, slack_rtm_output):
@@ -316,11 +347,14 @@ class AutoMemer:
         if not isinstance(message, str):
             message = json.dumps(message, indent=2)
 
-        with open(utils.LOG_FILE, 'a') as f:
+        with open(utils.SLACK_LOG_FILE, 'a') as f:
             f.write(message + ',\n')
 
+
     def count_memes(self):
+        utils.log_usage('count_memes')
         self.lock.acquire()
+        utils.log_usage('count_memes - lock acquired')
         try:
             with open(utils.SCRAPED_PATH, mode='r', encoding='utf-8') as f:
                 memes = f.read()
@@ -345,6 +379,7 @@ class AutoMemer:
             return Counter(), Counter()
         finally:
             self.lock.release()
+            utils.log_usage('count_memes - lock released')
 
     def _command_help(self):
         text = ''
@@ -587,6 +622,7 @@ class AutoMemer:
         return response
 
     def _command_num_memes(self, output):
+        utils.log_usage('handle_command - num-memes - start')
         response = ''
         command = output.get('@mention').lower().split()
         by_sub = 'by_sub' in command
@@ -622,6 +658,7 @@ class AutoMemer:
                         ups=postable[subs_lower_to_title[sub]],
                     )
                 response += '\n*Combined*: {}'.format(str(sum(postable.values())))
+        utils.log_usage('handle_command - num-memes - end')
         return response
 
     def _get_name(self, user_id):

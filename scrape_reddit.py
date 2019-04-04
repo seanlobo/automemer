@@ -19,23 +19,31 @@ def scrape(cursor, connection, lock=Lock(), print_output=False):
     # loading in subreddit list
     if print_output:
         print('Loading settings')
+    utils.log_usage('scrape - start')
     lock.acquire()
+    utils.log_usage('scrape - load settings - lock acquired')
+    ok = False
     try:
         with open('memes/settings.json', mode='r', encoding='utf-8') as f:
-            settings = json.loads(f.read())
-        sub_names = settings.get('subs', ['me_irl'])
-        subreddits = [reddit.subreddit(name) for name in sorted(list(sub_names))]
-        subreddits = [sub for sub in subreddits if not sub.over18]
-        NUM_MEMES = settings.get('num_memes', 50)
+            settings_str = f.read()
+        ok = True
     except OSError as e:  # logging errors and loading default sub of me_irl
         utils.log_error(e)
         subreddits = [reddit.subreddit('me_irl')]
         NUM_MEMES = 50
     finally:
         lock.release()
+        utils.log_usage('scrape - load settings - lock released')
+    if ok:
+        settings = json.loads(settings_str)
+        sub_names = settings.get('subs', ['me_irl'])
+        subreddits = [reddit.subreddit(name) for name in sorted(list(sub_names))]
+        subreddits = [sub for sub in subreddits if not sub.over18]
+        NUM_MEMES = settings.get('num_memes', 50)
 
     scraped_memes_path = 'memes/scraped.json'
 
+    utils.log_usage('scrape - praw queries - start')
     # querying praw without lock acquired, because this takes a long time
     reddit_memes = []
     for sub_i, sub in enumerate(subreddits):
@@ -63,12 +71,14 @@ def scrape(cursor, connection, lock=Lock(), print_output=False):
             }
             sub_memes.append(data)
         reddit_memes.append(sub_memes)
+    utils.log_usage('scrape - praw queries - end')
 
     if print_output:
         print()
         print('updating database')
     # update scraped list and database with lock acquired
     lock.acquire()
+    utils.log_usage('scrape - update db - lock acquired')
     try:
         # load scraped memes
         try:
@@ -113,6 +123,7 @@ def scrape(cursor, connection, lock=Lock(), print_output=False):
 
     finally:
         lock.release()
+        utils.log_usage('scrape - update db - lock released')
 
 
 def update_reddit_meme(cursor, connection, meme_url, lock):
