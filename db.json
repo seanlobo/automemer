@@ -1,6 +1,6 @@
 {
-  "user": "fill in",
-  "password": "fill in",
   "db": "fill in",
-  "host": "fill in"
+  "host": "fill in",
+  "password": "fill in",
+  "user": "fill in"
 }

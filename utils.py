@@ -37,6 +37,7 @@ def log_error(error):
     traceback_string = traceback.format_exc()
     logger.error('%s\n%s', error_type_string, traceback_string)
 
+
 def log_usage(log_str):
     time_str = str(datetime.datetime.now())
 

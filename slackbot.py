@@ -8,7 +8,6 @@ import time
 from collections import Counter
 from collections import defaultdict
 from multiprocessing import Lock
-from multiprocessing import Process
 from threading import Thread
 
 import websocket
@@ -66,6 +65,9 @@ class AutoMemer:
         self.conn = utils.get_connection(dbuser, dbpassword, dbname, dbhost)
         self.cursor = self.conn.cursor()
 
+        # how often to post to slack
+        self.post_to_slack_interval = self.load_post_to_slack_interval()
+
         # creating directories and files
         os.makedirs('memes', exist_ok=True)
         if not os.path.isfile(utils.SCRAPED_PATH):
@@ -86,60 +88,93 @@ class AutoMemer:
         return (now - midnight).seconds // 60
 
     def run(self):
-        READ_WEBSOCKET_DELAY = 1  # 1 second delay between reading from firehose
         utils.log_usage('run()')
         while True:
             try:
                 if self.client.rtm_connect():
                     print('AutoMemer connected and running!')
                     utils.log_usage('run() - self.client.rtm_connect()')
-                    post_to_slack_interval = self.load_post_to_slack_interval()
-                    while True:
-                        scraped_reddit = False
-                        # have we added the contents of scraped.json to our queue
-                        added_memes_to_queue = False
 
-                        slack_outputs = self.parse_slack_output(self.client.rtm_read())
-                        for output in slack_outputs:
-                            t = Thread(
-                                target=self.handle_command,
-                                args=(output,),
-                            )
-                            t.daemon = True
-                            t.start()
-                        time_as_minutes = self.current_time_as_min()
-                        if time_as_minutes % 30 == 0 and not scraped_reddit:
-                            t = Thread(
-                                target=scrape_reddit.scrape,
-                                args=(self.cursor, self.conn, self.lock),
-                            )
-                            t.daemon = True
-                            t.start()
-                            scraped_reddit = True  # we just added the memes
-                        elif time_as_minutes % 30 > 0:
-                            # the minute passed, reset scraped_reddit
-                            scraped_reddit = False
+                    # scraping thread, which scrapes reddit every 30 minutes
+                    t_scrape = Thread(
+                        target=self.scrape_repeatedly,
+                    )
+                    t_scrape.daemon = True
+                    t_scrape.start()
 
-                        if (
-                            time_as_minutes % post_to_slack_interval == 0 and
-                            (time_as_minutes == 0 or time_as_minutes > 9*60) and  # it's midnight or after 9am
-                            not added_memes_to_queue
-                        ):
-                            self.add_new_memes_to_queue()
-                            added_memes_to_queue = True
-                        elif (
-                            time_as_minutes % post_to_slack_interval > 0 and
-                            added_memes_to_queue
-                        ):
-                            added_memes_to_queue = False
+                    # command handling thread, which handles slack queries and
+                    # posts memes once per second
+                    t_command = Thread(
+                        target=self.handle_commands_repeatedly,
+                    )
+                    t_command.daemon = True
+                    t_command.start()
 
-                        self.pop_queue()
-                        time.sleep(READ_WEBSOCKET_DELAY)
+                    # meme popping thread, which adds memes to be posted to the queue
+                    # once every self.post_to_slack_interval minutes
+                    t_post = Thread(
+                        target=self.post_to_slack_repeatedly,
+                    )
+                    t_post.daemon = True
+                    t_post.start()
+
+                    # wait (forever) until the 3 threads terminate, by a user killed the program
+                    t_scrape.join()
+                    t_command.join()
+                    t_post.join()
                 else:
                     print('Connection failed. Invalid Slack token or bot ID?')
                     break
             except (websocket._exceptions.WebSocketConnectionClosedException, BrokenPipeError):
                 pass
+
+    def scrape_repeatedly(self):
+        """Scrapes reddit forever, once per interval, until the thread is killed"""
+        # sleep until it is an interval of 30 minutes
+        cur_time = self.current_time_as_min()
+        time.sleep(30 - (cur_time % 30))
+        while True:
+            # scrape reddit
+            t = Thread(
+                target=scrape_reddit.scrape,
+                args=(self.cursor, self.conn, self.lock),
+            )
+            t.daemon = True
+            t.start()
+
+            # sleep for 30 minutes
+            time.sleep(60 * 30)
+
+    def handle_commands_repeatedly(self):
+        """
+        Handles all commands from slack forever (until killed), and posts memes
+        at most once per second when there are any
+        """
+        while True:
+            slack_outputs = self.parse_slack_output(self.client.rtm_read())
+            for output in slack_outputs:
+                # handle all the commands
+                t = Thread(
+                    target=self.handle_command,
+                    args=(output,),
+                )
+                t.daemon = True
+                t.start()
+
+            # pop a meme if there is one
+            self.pop_queue()
+
+            # sleep to rate limit slack api queries
+            time.sleep(1)
+
+    def post_to_slack_repeatedly(self):
+        """Adds memes to our post queue once per post interval, forever (until killed)"""
+        while True:
+            if self.current_time_as_min() % self.post_to_slack_interval == 0:
+                self.add_new_memes_to_queue()
+
+            # sleep 1 minute
+            time.sleep(60)
 
     def handle_command(self, output):
         """
@@ -349,7 +384,6 @@ class AutoMemer:
 
         with open(utils.SLACK_LOG_FILE, 'a') as f:
             f.write(message + ',\n')
-
 
     def count_memes(self):
         utils.log_usage('count_memes')
