@@ -117,7 +117,7 @@ class AutoMemer:
 
             # continue execution while all 3 threads are still active
             while t_scrape.is_alive() and t_command.is_alive() and t_post.is_alive():
-                time.sleep(1)
+                time.sleep(1 * 60)
 
             print(
                 f't_scrape.is_alive = {t_scrape.is_alive()}, '
@@ -131,7 +131,7 @@ class AutoMemer:
         """Scrapes reddit forever, once per interval, until the thread is killed"""
         # sleep until it is an interval of 30 minutes
         cur_time = self.current_time_as_min()
-        time.sleep(30 - (cur_time % 30))
+        time.sleep((30 - (cur_time % 30)) * 60)
         while True:
             # scrape reddit
             t = Thread(
@@ -142,7 +142,7 @@ class AutoMemer:
             t.start()
 
             # sleep for 30 minutes
-            time.sleep(60 * 30)
+            time.sleep(30 * 60)
 
     def handle_commands_repeatedly(self):
         """
@@ -164,7 +164,7 @@ class AutoMemer:
             self.pop_queue()
 
             # sleep to rate limit slack api queries
-            time.sleep(1)
+            time.sleep(1 * 60)
 
     def post_to_slack_repeatedly(self):
         """Adds memes to our post queue once per post interval, forever (until killed)"""
@@ -173,7 +173,7 @@ class AutoMemer:
                 self.add_new_memes_to_queue()
 
             # sleep 1 minute
-            time.sleep(60)
+            time.sleep(1 * 60)
 
     def handle_command(self, output):
         """
