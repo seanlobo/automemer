@@ -163,8 +163,8 @@ class AutoMemer:
             # pop a meme if there is one
             self.pop_queue()
 
-            # sleep to rate limit slack api queries
-            time.sleep(1 * 60)
+            # sleep for 1 second to rate limit slack api queries
+            time.sleep(1)
 
     def post_to_slack_repeatedly(self):
         """Adds memes to our post queue once per post interval, forever (until killed)"""
