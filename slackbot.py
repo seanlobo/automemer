@@ -10,7 +10,6 @@ from collections import defaultdict
 from multiprocessing import Lock
 from threading import Thread
 
-import websocket
 from slackclient import SlackClient
 
 import scrape_reddit
@@ -89,44 +88,44 @@ class AutoMemer:
 
     def run(self):
         utils.log_usage('run()')
-        while True:
-            try:
-                if self.client.rtm_connect():
-                    print('AutoMemer connected and running!')
-                    utils.log_usage('run() - self.client.rtm_connect()')
+        if self.client.rtm_connect():
+            print('AutoMemer connected and running!')
+            utils.log_usage('run() - self.client.rtm_connect()')
 
-                    # scraping thread, which scrapes reddit every 30 minutes
-                    t_scrape = Thread(
-                        target=self.scrape_repeatedly,
-                    )
-                    t_scrape.daemon = True
-                    t_scrape.start()
+            # scraping thread, which scrapes reddit every 30 minutes
+            t_scrape = Thread(
+                target=self.scrape_repeatedly,
+            )
+            t_scrape.daemon = True
+            t_scrape.start()
 
-                    # command handling thread, which handles slack queries and
-                    # posts memes once per second
-                    t_command = Thread(
-                        target=self.handle_commands_repeatedly,
-                    )
-                    t_command.daemon = True
-                    t_command.start()
+            # command handling thread, which handles slack queries and
+            # posts memes once per second
+            t_command = Thread(
+                target=self.handle_commands_repeatedly,
+            )
+            t_command.daemon = True
+            t_command.start()
 
-                    # meme popping thread, which adds memes to be posted to the queue
-                    # once every self.post_to_slack_interval minutes
-                    t_post = Thread(
-                        target=self.post_to_slack_repeatedly,
-                    )
-                    t_post.daemon = True
-                    t_post.start()
+            # meme popping thread, which adds memes to be posted to the queue
+            # once every self.post_to_slack_interval minutes
+            t_post = Thread(
+                target=self.post_to_slack_repeatedly,
+            )
+            t_post.daemon = True
+            t_post.start()
 
-                    # wait (forever) until the 3 threads terminate, by a user killed the program
-                    t_scrape.join()
-                    t_command.join()
-                    t_post.join()
-                else:
-                    print('Connection failed. Invalid Slack token or bot ID?')
-                    break
-            except (websocket._exceptions.WebSocketConnectionClosedException, BrokenPipeError):
-                pass
+            # continue execution while all 3 threads are still active
+            while t_scrape.is_alive() and t_command.is_alive() and t_post.is_alive():
+                time.sleep(1)
+
+            print(
+                f't_scrape.is_alive = {t_scrape.is_alive()}, '
+                f't_command.is_alive = {t_command.is_alive()}, '
+                f't_post.is_alive = {t_post.is_alive()}',
+            )
+        else:
+            print('Connection failed. Invalid Slack token or bot ID?')
 
     def scrape_repeatedly(self):
         """Scrapes reddit forever, once per interval, until the thread is killed"""
