@@ -169,7 +169,8 @@ class AutoMemer:
     def post_to_slack_repeatedly(self):
         """Adds memes to our post queue once per post interval, forever (until killed)"""
         while True:
-            if self.current_time_as_min() % self.post_to_slack_interval == 0:
+            cur_time = self.current_time_as_min()
+            if cur_time % self.post_to_slack_interval == 0 and cur_time >= 60 * 9:
                 self.add_new_memes_to_queue()
 
             # sleep 1 minute
