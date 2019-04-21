@@ -1,3 +1,4 @@
 praw
 pymysql
 slackclient
+tqdm

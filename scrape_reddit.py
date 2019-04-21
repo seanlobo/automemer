@@ -4,6 +4,7 @@ from multiprocessing import Lock
 
 import praw
 import prawcore.exceptions
+from tqdm import tqdm
 
 import utils
 
@@ -53,13 +54,14 @@ def scrape(cursor, connection, lock=Lock(), print_output=False):
     utils.log_usage('scrape - praw queries - start')
     # querying praw without lock acquired, because this takes a long time
     reddit_memes = []
+    if print_output:
+        loop_tqdm = tqdm(total=len(subreddits) * NUM_MEMES, desc=f'sub 1/{len(subreddits)} post 1/{NUM_MEMES}')
     for sub_i, sub in enumerate(subreddits):
         sub_memes = []
         for post_i, post in enumerate(sub.hot(limit=NUM_MEMES)):
             if print_output:
-                post_str = f'{post_i + 1:}/{NUM_MEMES}'
-                sub_str = f'{sub_i + 1:}/{len(subreddits)}'
-                print(f'\rfetching data for post {post_str: <5} in sub {sub_str: <5}', end=' ')
+                loop_tqdm.update()
+                loop_tqdm.set_description(f'sub {sub_i + 1}/{len(subreddits)} post {post_i + 1}/{NUM_MEMES}')
             data = {
                 'over_18': post.over_18,
                 'id': post.id,
