@@ -3,6 +3,7 @@ from datetime import datetime
 from multiprocessing import Lock
 
 import praw
+import prawcore.exceptions
 
 import utils
 
@@ -37,8 +38,14 @@ def scrape(cursor, connection, lock=Lock(), print_output=False):
     if ok:
         settings = json.loads(settings_str)
         sub_names = settings.get('subs', ['me_irl'])
-        subreddits = [reddit.subreddit(name) for name in sorted(list(sub_names))]
-        subreddits = [sub for sub in subreddits if not sub.over18]
+        all_subreddits = [reddit.subreddit(name) for name in sorted(list(sub_names))]
+        subreddits = []  # filtered subs, specificaly for subs that aren't nsfw
+        for sub in all_subreddits:
+            try:
+                if not sub.over18:
+                    subreddits.append(sub)
+            except prawcore.exceptions.Forbidden:
+                pass
         NUM_MEMES = settings.get('num_memes', 50)
 
     scraped_memes_path = 'memes/scraped.json'
